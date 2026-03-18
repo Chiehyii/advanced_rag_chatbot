@@ -1,0 +1,354 @@
+import { useState, useEffect } from 'react';
+import { ChatHeader } from './components/ChatHeader';
+import { MessageList } from './components/MessageList';
+import { ChatInput } from './components/ChatInput';
+import { FeedbackModal } from './components/FeedbackModal';
+import { Message, Language } from './types';
+import './index.css';
+
+const CHAT_STORAGE_KEY = 'tcu_scholarship_chat_history';
+
+// --- i18n Dictionaries ---
+export const translations = {
+  zh: {
+    welcome_title: "你好！想了解哪些獎助學金？",
+    title: "獎助學金問答",
+    input_placeholder: "請在這裡輸入您的問題...",
+    send_button_title: "Send",
+    clear_chat_button: "清除對話",
+    help_button: "幫助",
+    feedback_title: "提供你的意見",
+    feedback_prompt: "請告訴我們這個回答哪裡不符合你的預期，以幫助我們提升服務品質！",
+    feedback_placeholder: "例如：答案不正確、資訊不完整、與問題無關...",
+    cancel_button: "取消",
+    submit_button: "送出",
+    initial_bot_message: "你好！我是慈濟大學獎助學金問答助理，請問有什麼可以幫助您的嗎？",
+    error_message: "抱歉，連線時發生錯誤，請稍後再試。",
+    example_question_1: "提供給五專生原住民的獎助學金有哪些?",
+    example_question_2: "校內的工讀甚麼時候開放申請?",
+    example_question_3: "家庭意外補助",
+    example_question_4: "低收入可以申請甚麼?",
+    example_question_5: "大三下要到海外交流和志工服務, 學校有提供甚麼補助嗎?",
+    example_question_6: "學校有提供證照獎勵補助嗎?",
+    example_question_7: "就學貸款辦理資訊",
+    example_question_8: "碩士班外籍生可以申請獎助學金嗎？",
+    example_question_9: "學術論文發表的獎勵補助",
+    example_question_10: "參加校外競賽可申請的獎學金",
+    example_question_11: "大學部原住民可以申請甚麼獎助學金?",
+    example_question_12: "弱勢助學",
+    reference_title: "來源：",
+    unknown_source: "未知來源",
+    chat_notice: "慈濟大學獎助學金問答可能會出錯，請查證回覆內容。",
+    clear_chat_button_title: "Clear Chat",
+    help_button_title: "Get Help",
+    help_alert: "聯絡資訊\n\n電話: (03) 856-5301 ext.00000\n郵箱: example@gms.tcu.edu.tw",
+    show_more: "顯示全部",
+    show_less: "收起"
+  },
+  en: {
+    welcome_title: "Hello! What would you like to know about scholarships?",
+    title: "Scholarship Chat",
+    input_placeholder: "Please enter your question here...",
+    send_button_title: "Send",
+    clear_chat_button: "Clear Chat",
+    help_button: "Help",
+    feedback_title: "Provide your feedback",
+    feedback_prompt: "Please let us know where this answer did not meet your expectations to help us improve our service quality!",
+    feedback_placeholder: "For example: The answer is incorrect, the information is incomplete, it is not relevant to the question...",
+    cancel_button: "Cancel",
+    submit_button: "Submit",
+    initial_bot_message: "Hello! I am the Tzu Chi University Scholarship Q&A Assistant. How can I help you?",
+    error_message: "Sorry, an error occurred while connecting. Please try again later.",
+    example_question_1: "What scholarships are available for aboriginal students in the five-year junior college program?",
+    example_question_2: "When can I apply for on-campus work-study jobs?",
+    example_question_3: "Family accident subsidy",
+    example_question_4: "What can I apply for with a low-income status?",
+    example_question_5: "I am going on an overseas exchange and volunteer service in the second semester of my junior year. Does the school offer any subsidies?",
+    example_question_6: "Does the school offer any certification or license incentives or subsidies?",
+    example_question_7: "Student loan application information",
+    example_question_8: "Can international students in master's programs  ",
+    example_question_9: "Rewards and subsidies for publishing academic papers",
+    example_question_10: "Scholarships for participating in external competitions",
+    example_question_11: "What scholarships are available for aboriginal students in the undergraduate level?",
+    example_question_12: "What can I apply for with a low-income status?",
+    reference_title: "References:",
+    unknown_source: "Unknown source",
+    chat_notice: "TCU Scholarship Chat may produce errors, please verify the responses.",
+    clear_chat_button_title: "Clear Chat",
+    help_button_title: "Get Help",
+    help_alert: "Contact Information\n\nPhone: (03) 856-5301 ext.00000\nEmail: example@gms.tcu.edu.tw",
+    show_more: "Show all",
+    show_less: "Show less"
+  }
+};
+
+function App() {
+  const [messages, setMessages] = useState<Message[]>(() => {
+    try {
+      const saved = sessionStorage.getItem(CHAT_STORAGE_KEY);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [language, setLanguage] = useState<Language>('zh');
+  const [isLoading, setIsLoading] = useState(false);
+
+  // Feedback state
+  const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
+  const [currentFeedbackLogId, setCurrentFeedbackLogId] = useState<string | null>(null);
+
+  // Persist messages to sessionStorage whenever they change
+  useEffect(() => {
+    // Only save completed (non-streaming) messages
+    const messagesToSave = messages.filter(m => !m.isStreaming);
+    try {
+      sessionStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(messagesToSave));
+    } catch (e) {
+      console.warn('Failed to save chat history to sessionStorage:', e);
+    }
+  }, [messages]);
+
+  const handleSendMessage = async (text: string) => {
+    // Hide prediction chips from the last bot message before responding
+    setMessages(prev => {
+      const updatedMessages = [...prev];
+      for (let i = updatedMessages.length - 1; i >= 0; i--) {
+        if (updatedMessages[i].role === 'assistant' && updatedMessages[i].chips) {
+          updatedMessages[i] = { ...updatedMessages[i], chips: [] };
+          break;
+        }
+      }
+      return updatedMessages;
+    });
+
+    // Add user message
+    const newMessage = { role: 'user', content: text } as Message;
+    setMessages(prev => [...prev, newMessage]);
+    setIsLoading(true);
+
+    // Prepare history payload for API
+    const history = messages.map(msg => ({ role: msg.role, content: msg.content }));
+    history.push({ role: 'user', content: text });
+
+    // Add empty placeholder for bot streaming
+    setMessages(prev => [...prev, { role: 'assistant', content: '', isStreaming: true }]);
+
+    try {
+      const response = await fetch('/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-API-Key': 'supersecretapikey123'  // 替換成你的金鑰
+        },
+        body: JSON.stringify({ query: text, history, lang: language })
+      });
+
+      if (!response.ok) {
+        throw new Error('Network response was not ok');
+      }
+
+      if (response.body) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let done = false;
+        let buffer = '';
+        let fullAnswer = '';
+
+        while (!done) {
+          const { value, done: readerDone } = await reader.read();
+          done = readerDone;
+
+          if (value) {
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n\n');
+            buffer = lines.pop() || ''; // keep incomplete line
+
+            for (const line of lines) {
+              if (line.startsWith('event: end_stream')) {
+                const dataLine = line.substring(line.indexOf('data: ') + 6);
+                if (dataLine.trim()) {
+                  try {
+                    const finalPayload = JSON.parse(dataLine);
+                    const finalData = finalPayload.data || {};
+                    // Update the last message with contexts, logId, chips, and remove streaming flag
+                    setMessages(prev => {
+                      const newMessages = [...prev];
+                      const lastIdx = newMessages.length - 1;
+                      if (newMessages[lastIdx].role === 'assistant') {
+                        newMessages[lastIdx] = {
+                          ...newMessages[lastIdx],
+                          isStreaming: false,
+                          contexts: finalData.contexts || [],
+                          logId: finalData.log_id,
+                          chips: finalData.chips || []
+                        };
+                      }
+                      return newMessages;
+                    });
+                  } catch (e) {
+                    console.error('Error parsing final JSON:', e, dataLine);
+                  }
+                }
+              } else if (line.startsWith('data: ')) {
+                const chunk = line.substring(6);
+
+                try {
+                  const parsed = JSON.parse(chunk);
+                  if (parsed.type === 'content') {
+                    fullAnswer += parsed.data;
+                  }
+                } catch (e) {
+                  // Fallback for raw text
+                  fullAnswer += chunk;
+                }
+
+                // Update the last message content with the stream
+                setMessages(prev => {
+                  const newMessages = [...prev];
+                  const lastIdx = newMessages.length - 1;
+                  if (newMessages[lastIdx].role === 'assistant') {
+                    newMessages[lastIdx].content = fullAnswer;
+                  }
+                  return newMessages;
+                });
+              } else if (line.startsWith('event: error')) {
+                throw new Error('Server-side error during streaming.');
+              }
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('API Error:', error);
+      setMessages(prev => {
+        const newMessages = [...prev];
+        const lastIdx = newMessages.length - 1;
+        if (newMessages[lastIdx].role === 'assistant') {
+          newMessages[lastIdx] = {
+            ...newMessages[lastIdx],
+            content: 'Sorry, an error occurred while connecting. Please try again later.',
+            isStreaming: false
+          };
+        }
+        return newMessages;
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleClearChat = () => {
+    setMessages([]);
+    try {
+      sessionStorage.removeItem(CHAT_STORAGE_KEY);
+    } catch (e) {
+      console.warn('Failed to clear chat history from sessionStorage:', e);
+    }
+  };
+
+  const handleFeedback = async (logId: string, type: 'like' | 'dislike' | null) => {
+    // Send feedback to backend
+    await fetch('/feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ log_id: logId, feedback_type: type })
+    }).catch(err => console.error("Error sending feedback:", err));
+
+    if (type === 'dislike') {
+      setCurrentFeedbackLogId(logId);
+      setIsFeedbackOpen(true);
+    }
+  };
+
+  const handleFeedbackSubmit = async (feedbackText: string) => {
+    if (!currentFeedbackLogId) return;
+
+    await fetch('/feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        log_id: currentFeedbackLogId,
+        feedback_type: 'dislike',
+        feedback_text: feedbackText
+      })
+    });
+    setIsFeedbackOpen(false);
+    setCurrentFeedbackLogId(null);
+  };
+
+  const isInitialState = messages.length === 0;
+  const t = translations[language];
+
+  return (
+    <>
+      <div id="main-layout" style={{ display: 'flex', flexGrow: 1, width: '100%', overflow: 'hidden' }}>
+        <div id="chat-side" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, width: '100%', position: 'relative' }}>
+
+          <ChatHeader language={language} onLanguageChange={setLanguage} />
+
+          {isInitialState ? (
+            <div className="hero-container">
+              <div className="hero-title">{t.welcome_title}</div>
+              <ChatInput
+                isLoading={isLoading}
+                onSendMessage={handleSendMessage}
+                onClearChat={handleClearChat}
+                onHelp={() => window.open('https://oia.tcu.edu.trim', '_blank')}
+                language={language}
+                isInitial={true}
+              />
+              <div className="example-questions-container initial-chips">
+                {[
+                  t.example_question_1,
+                  t.example_question_2,
+                  t.example_question_3,
+                  t.example_question_4,
+                  t.example_question_5,
+                  t.example_question_6,
+                  t.example_question_7,
+                  t.example_question_8,
+                  t.example_question_9,
+                  t.example_question_10,
+                  t.example_question_11,
+                  t.example_question_12
+
+                ].map((q, idx) => (
+                  <div key={idx} className="example-question" onClick={() => handleSendMessage(q)}>
+                    {q}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <>
+              <MessageList
+                messages={messages}
+                onFeedback={handleFeedback}
+                onChipClick={handleSendMessage}
+                language={language}
+              />
+
+              <ChatInput
+                isLoading={isLoading}
+                onSendMessage={handleSendMessage}
+                onClearChat={handleClearChat}
+                onHelp={() => window.open('https://oia.tcu.edu.trim', '_blank')}
+                language={language}
+              />
+            </>
+          )}
+        </div>
+      </div>
+
+      <FeedbackModal
+        isOpen={isFeedbackOpen}
+        onClose={() => setIsFeedbackOpen(false)}
+        onSubmit={handleFeedbackSubmit}
+        language={language}
+      />
+    </>
+  );
+}
+
+export default App;

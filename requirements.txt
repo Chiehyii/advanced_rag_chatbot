@@ -1,0 +1,47 @@
+# --- Core Backend ---
+fastapi
+uvicorn
+
+# --- Frontend ---
+streamlit
+
+# --- OpenAI + LangChain ---
+openai
+langchain
+langchain-community
+langchain-core
+langchain-openai
+langchain-text-splitters
+
+# --- Vector DBs ---
+pymilvus
+psycopg2-binary     # PGVector 用
+
+# --- Embeddings / NLP / Transformers ---
+transformers
+huggingface-hub
+tokenizers
+tiktoken
+
+# --- CKIP Transformers ---
+ckip-transformers
+
+# --- Data / Utils / Web ---
+pydantic
+python-dotenv
+requests
+numpy
+pandas
+beautifulsoup4
+APScheduler
+
+# --- RAG evaluation ---
+ragas
+
+# --- Optional but recommended ---
+sentence-transformers  # embedding 常用，如 all-MiniLM
+
+# --- Database / ML ---
+psycopg2-binary
+sentence-transformers
+torch
