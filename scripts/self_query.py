@@ -35,8 +35,24 @@ class ScholarshipFilters(BaseModel):
 
 # 讀取 Schema 作為 LLM 的參考
 SCHEMA_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "metadata_schema.json")
-with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
-    metadata_schema = json.load(f)
+_SCHEMA_CACHE = None
+
+def get_metadata_schema():
+    """安全的取得 metadata_schema.json 的內容並暫存在記憶體中"""
+    global _SCHEMA_CACHE
+    if _SCHEMA_CACHE is None:
+        try:
+            with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
+                _SCHEMA_CACHE = json.load(f)
+        except Exception as e:
+            print(f"[Error] Schema 載入失敗: {e}")
+            # 載入失敗時，回傳空字典，避免後續程式出錯
+            _SCHEMA_CACHE = {
+                "identity": [],
+                "education_system": [],
+                "tags": []
+            }
+    return _SCHEMA_CACHE
 
 openai_client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
 
@@ -46,6 +62,9 @@ async def generate_milvus_expr(question: str) -> str:
     只嚴格回傳那些"確定存在於問句中且對應到 metadata_schema.json"的條件。
     如果問句沒有任何限制條件，則回傳空字串 ""。
     """
+
+    # 把記憶體裡面的 schema 拿出來用
+    metadata_schema = get_metadata_schema()
     
     system_prompt = f"""
     You are an AI assistant that extracts filtering criteria from a user's query about scholarships.
