@@ -15,6 +15,9 @@ from prompts import PROMPTS
 from scripts.self_query import generate_milvus_expr
 from sentence_transformers import CrossEncoder
 
+# 意圖分類
+from scripts.intent_classification import intent_classification
+
 # --- Constants ---
 MIN_RERANK_SCORE = 0.3  # Minimum Cross-Encoder score to keep a document
 
@@ -396,10 +399,21 @@ async def stream_chat_pipeline(question: str, history: list | None = None, lang:
         
         print(f"\n❓ 最終問題: {rephrased_question} (原始: {original_question})")
 
-        # --- RAG-First: Always try retrieval first, fallback to small talk ---
-        raw_contexts = await retrieve_context(rephrased_question, lang=lang)
-        cleaned_contexts = log_and_clean_contexts(raw_contexts)
+        # --- 1. 先判斷意圖：決定是否需要動用資料庫 ---
+        intent = await intent_classification(rephrased_question, lang=lang)
+        print(f"[Intent] 辨識意圖為：{intent}")
 
+        cleaned_contexts = [] # 預設為空列表
+
+        # 如果意圖不是 'other' 就去資料庫翻找資料
+        if intent != 'other':
+            print(f"[Pipeline] Intent is '{intent}', retrieving documents...")
+            raw_contexts = await retrieve_context(rephrased_question, lang=lang)
+            cleaned_contexts = log_and_clean_contexts(raw_contexts)
+        else:
+            print(f"[Pipeline] Intent is '{intent}', skipping retrieval.")
+        
+        # ---2. 根據是否找到文件決定要走 RAG 還是 Small Talk ---
         if cleaned_contexts:
             # --- RAG path: we have relevant documents ---
             print(f"[Pipeline] RAG path: {len(cleaned_contexts)} relevant documents found.")
