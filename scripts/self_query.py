@@ -45,7 +45,8 @@ def get_metadata_schema():
             with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
                 _SCHEMA_CACHE = json.load(f)
         except Exception as e:
-            print(f"[Error] Schema 載入失敗: {e}")
+            # 🚨 ERROR：Schema 載入失敗
+            print(f"[Schema] Schema 載入失敗: {e}")
             # 載入失敗時，回傳空字典，避免後續程式出錯
             _SCHEMA_CACHE = {
                 "identity": [],
@@ -134,6 +135,7 @@ async def generate_milvus_expr(question: str) -> str:
         return ""
         
     except Exception as e:
+        # 🚨 ERROR：生成 expr 失敗
         print(f"[Self-Query] Error generating expr: {e}")
         return ""
 

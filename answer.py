@@ -18,6 +18,10 @@ from sentence_transformers import CrossEncoder
 # 意圖分類
 from scripts.intent_classification import intent_classification
 
+# 引入 logger
+from logger import get_logger
+logger = get_logger(__name__)
+
 # --- Constants ---
 MIN_RERANK_SCORE = 0.3  # Minimum Cross-Encoder score to keep a document
 
@@ -53,7 +57,8 @@ async def retrieve_context(question: str, lang: str = 'zh', top_k: int = 20):
     
     # 2. 透過 LLM 動態提取 metadata 過濾條件 (Self-Querying)
     expr = await generate_milvus_expr(question)
-    print(f"\n[Self-Query] Milvus Dynamic Expr: '{expr}'")
+    # 📝 INFO：記錄動態提取的 Milvus 查詢條件
+    logger.info(f"[Self-Query] Milvus Dynamic Expr: '{expr}'")
 
     # 3. 執行混合檢索
     # Dense Request
@@ -89,11 +94,14 @@ async def retrieve_context(question: str, lang: str = 'zh', top_k: int = 20):
                 limit=top_k,
                 output_fields=["id", "text", "source_file", "source_url", "identity", "category", "education_system", "tags"]
             )
-            print(f"[Search] Hybrid search (Dense + Sparse) succeeded.")
+            # 📝 INFO：記錄混合檢索成功
+            logger.info(f"[Search] Hybrid search (Dense + Sparse) succeeded.")
             return results
         except Exception as e:
-            print(f"[Search] ⚠️ Hybrid search failed ({type(e).__name__}): {e}")
-            print(f"[Search] Falling back to Dense-only search.")
+            # ⚠️ WARNING：因為系統有 Fallback 備案不會當機，所以這裡只做記錄，不拋出錯誤。
+            logger.warning(f"[Search] Hybrid search failed ({type(e).__name__}): {e}")
+            # 📝 INFO：記錄改用純向量檢索
+            logger.info(f"[Search] Falling back to Dense-only search.")
             try:
                 results = milvus_client.search(
                     collection_name=config.MILVUS_COLLECTION,
@@ -104,17 +112,20 @@ async def retrieve_context(question: str, lang: str = 'zh', top_k: int = 20):
                     filter=expr if expr else None,
                     output_fields=["id", "text", "source_file", "source_url", "identity", "category", "education_system", "tags"],
                 )
-                print(f"[Search] Dense-only fallback succeeded.")
+                # 📝 INFO：記錄純向量檢索成功
+                logger.info(f"[Search] Dense-only fallback succeeded.")
                 return results
             except Exception as fallback_err:
-                print(f"[Search] ❌ Dense-only fallback also failed ({type(fallback_err).__name__}): {fallback_err}")
+                # 🚨 ERROR：純向量檢索也失敗 (連備案都失敗了，那就是嚴重的錯誤)
+                logger.error(f"[Search] Dense-only fallback also failed ({type(fallback_err).__name__}): {fallback_err}", exc_info=True)
                 return []
 
     results = await asyncio.to_thread(_milvus_hybrid_search)
 
     # --- Filter Fallback: 帶 filter 搜不到時，去掉 filter 重搜一次 ---
     if (not results or not results[0]) and expr:
-        print(f"[Search] ⚠️ Filtered search returned 0 results. Retrying WITHOUT filter...")
+        # 📝 INFO：記錄帶 filter 搜不到，去掉 filter 重搜 (因為沒搜到東西而放寬條件)
+        logger.info(f"[Filter] Filtered search returned 0 results. Retrying WITHOUT filter...")
 
         dense_req_no_filter = AnnSearchRequest(
             data=[question_dense_embedding],
@@ -142,14 +153,17 @@ async def retrieve_context(question: str, lang: str = 'zh', top_k: int = 20):
                                    "identity", "category", "education_system", "tags"]
                 )
             except Exception as e:
-                print(f"[Search] ❌ Retry without filter failed: {e}")
+                # 🚨 ERROR：重試發生異常，去掉 filter 重搜也失敗
+                logger.error(f"[Filter] Retry without filter failed ({type(e).__name__}): {e}", exc_info=True)
                 return []
 
         results = await asyncio.to_thread(_retry_without_filter)
         if results and results[0]:
-            print(f"[Search] ✅ Retry without filter found {len(results[0])} results.")
+            # 📝 INFO：記錄去掉 filter 重搜成功
+            logger.info(f"[Filter] Retry without filter found {len(results[0])} results.")
         else:
-            print(f"[Search] Retry without filter also returned 0 results.")
+            # 🚨 ERROR：去掉 filter 重搜也失敗 (連備案都失敗了，那就是嚴重的錯誤)
+            logger.error(f"[Filter] Retry without filter also returned 0 results.")
 
     if not results or not results[0]:
         return []
@@ -157,7 +171,8 @@ async def retrieve_context(question: str, lang: str = 'zh', top_k: int = 20):
     milvus_docs = results[0]
     
     # --- Phase 5: Cross-Encoder Re-Ranking ---
-    print(f"\n[Re-Ranking] Milvus returned {len(milvus_docs)} candidate documents. Starting Cross-Encoder scoring...")
+    # 📝 INFO：記錄 Cross-Encoder Re-Ranking
+    logger.info(f"[Re-Ranking] Milvus returned {len(milvus_docs)} candidate documents. Starting Cross-Encoder scoring...")
     
     # Prepare pairs for scoring: (question, document_text)
     pairs = []
@@ -185,10 +200,12 @@ async def retrieve_context(question: str, lang: str = 'zh', top_k: int = 20):
     refined_docs = [d for d in milvus_docs[:top_n] if d["cross_encoder_score"] >= MIN_RERANK_SCORE]
     
     if not refined_docs:
-        print(f"[Re-Ranking] No documents passed the minimum score threshold ({MIN_RERANK_SCORE}).")
+        # 📝 INFO：記錄 Cross-Encoder Re-Ranking 失敗
+        logger.info(f"[Re-Ranking] No documents passed the minimum score threshold ({MIN_RERANK_SCORE}).")
         return []
     
-    print(f"[Re-Ranking] Selected {len(refined_docs)} documents (threshold >= {MIN_RERANK_SCORE}). Highest score: {refined_docs[0]['cross_encoder_score']:.4f}")
+    # 📝 INFO：記錄 Cross-Encoder Re-Ranking 成功
+    logger.info(f"[Re-Ranking] Selected {len(refined_docs)} documents (threshold >= {MIN_RERANK_SCORE}). Highest score: {refined_docs[0]['cross_encoder_score']:.4f}")
     
     return refined_docs
 
@@ -198,7 +215,9 @@ def log_and_clean_contexts(retrieved_docs: list):
     """
     print("\n=== RAG檢索結果 ===")
     if not retrieved_docs:
-        print("（沒有檢索到任何結果）")
+        # 📝 INFO：記錄檢索結果為空
+        logger.info("[RAG] No documents retrieved.")
+        # print("（沒有檢索到任何結果）")
         return []
 
     cleaned_contexts = []
@@ -208,10 +227,12 @@ def log_and_clean_contexts(retrieved_docs: list):
         # fallback to distance if score isn't present
         score = res.get("cross_encoder_score", res.get("distance", 0.0))
         
-        print(f"結果 {i}:")
-        print(f"內容: {entity.get('text', '')[:100]}...")
-        print(f"相似度: {score:.4f}, 來源: {entity.get('source_file', 'N/A')}")
-        print("-" * 50)
+        # 📝 INFO：記錄檢索結果
+        # logger.info(f"[RAG] Retrieved document {i}: {entity.get('text', '')[:100]}... (Score: {score:.4f}, Source: {entity.get('source_file', 'N/A')})")
+        # print(f"結果 {i}:")
+        # print(f"內容: {entity.get('text', '')[:100]}...")
+        # print(f"相似度: {score:.4f}, 來源: {entity.get('source_file', 'N/A')}")
+        # print("-" * 50)
 
         identity = entity.get("identity")
         category = entity.get("category")
@@ -236,7 +257,8 @@ def log_to_db(question, rephrased_question, answer, contexts, latency_ms, usage)
 
     # 檢查有沒有連線池可以用
     if not config.DB_POOL:
-        print("[DB] ❌ 找不到資料庫連線池可用")
+        # 🚨 ERROR：找不到資料庫連線池
+        logger.error("[DB] No database connection pool available.")
         return None
 
     # 1. 從連線池借用一個連線
@@ -256,12 +278,14 @@ def log_to_db(question, rephrased_question, answer, contexts, latency_ms, usage)
         cursor.execute(insert_query, (question, rephrased_question, answer, json.dumps(contexts, ensure_ascii=False), latency_ms, prompt_tokens, completion_tokens, total_tokens))
         log_id = cursor.fetchone()[0]
         conn.commit()
-        print(f"\n[DB] 本次問答紀錄已成功儲存到 PostgreSQL 資料庫，ID: {log_id}。")
+        # 📝 INFO：記錄資料庫寫入成功
+        logger.info(f"[DB] Successfully wrote question to PostgreSQL database, ID: {log_id}.")
         return log_id
     except psycopg2.Error as e:
         # 發生錯誤時要復原(Rollback)
         if conn: conn.rollback()
-        print(f"\n[DB Error] 無法寫入 PostgreSQL 資料庫: {e}")
+        # 🚨 ERROR：資料庫寫入錯誤
+        logger.error(f"[DB] Failed to write to PostgreSQL database: {e}", exc_info=True)
         return None
     finally:
         if cursor: cursor.close()
@@ -292,10 +316,12 @@ async def _rephrase_question_with_history(history: list, question: str, lang: st
         rephrased_question = response.choices[0].message.content.strip()
         if not rephrased_question:
             return question
-        print(f"🔄 重構後的問題: {rephrased_question}")
+        # 📝 INFO：記錄問題重構成功
+        logger.info(f"[Rephrase] Successfully rephrased question: {rephrased_question}")
         return rephrased_question
     except Exception as e:
-        print(f"⚠️ 問題重構失敗: {e}")
+        # ⚠️ WARNING：問題重構失敗
+        logger.warning(f"[Rephrase] Failed to rephrase question: {e}", exc_info=True)
         return question
 
 async def generate_answer_stream(question: str, cleaned_contexts: list, lang: str = 'zh', usage_data: dict | None = None):
@@ -378,7 +404,8 @@ async def generate_suggested_replies(question: str, answer: str, lang: str = 'zh
         )
         return response.choices[0].message.parsed.replies
     except Exception as e:
-        print(f"⚠️ 預測追問失敗: {e}")
+        # ⚠️ WARNING：根據使用者的問答預測產生的3個問題失敗了
+        logger.warning(f"[Rephrase] Failed to predict follow-up questions: {e}", exc_info=True)
         return []
 
 async def stream_chat_pipeline(question: str, history: list | None = None, lang: str = 'zh'):
@@ -397,11 +424,13 @@ async def stream_chat_pipeline(question: str, history: list | None = None, lang:
         if history:
             rephrased_question = await _rephrase_question_with_history(history, question, lang=lang)
         
-        print(f"\n❓ 最終問題: {rephrased_question} (原始: {original_question})")
+        # 📝 INFO：記錄最終問題
+        logger.info(f"[Question] Final question: {rephrased_question} (Original: {original_question})")
 
         # --- 1. 先判斷意圖：決定是否需要動用資料庫 ---
         intent = await intent_classification(rephrased_question, lang=lang)
-        print(f"[Intent] 辨識意圖為：{intent}")
+        # 📝 INFO：記錄辨識意圖
+        logger.info(f"[Intent] Intent: {intent}")
 
         cleaned_contexts = [] # 預設為空列表
 
@@ -416,7 +445,8 @@ async def stream_chat_pipeline(question: str, history: list | None = None, lang:
         # ---2. 根據是否找到文件決定要走 RAG 還是 Small Talk ---
         if cleaned_contexts:
             # --- RAG path: we have relevant documents ---
-            print(f"[Pipeline] RAG path: {len(cleaned_contexts)} relevant documents found.")
+            # 📝 INFO：記錄找到的文件數量
+            logger.info(f"[RAG] RAG path: {len(cleaned_contexts)} relevant documents found.")
 
             llm_stream = generate_answer_stream(rephrased_question, cleaned_contexts, lang=lang, usage_data=usage_data)
             buffer = ""
@@ -472,7 +502,8 @@ async def stream_chat_pipeline(question: str, history: list | None = None, lang:
         
         else:
             # --- Fallback: No relevant documents found, use small talk ---
-            print(f"[Pipeline] Fallback to small talk: no documents passed score threshold.")
+            # 📝 INFO：記錄使用小對話
+            logger.info(f"[Small Talk] Fallback to small talk: No relevant documents found.")
             stream = await openai_client.chat.completions.create(
                 model=config.OPENAI_MODEL_NAME,
                 messages=[
@@ -497,15 +528,18 @@ async def stream_chat_pipeline(question: str, history: list | None = None, lang:
     finally:
         end_time = time.time()
         latency_ms = (end_time - start_time) * 1000
-        print(f"\n⏱️ 本次問答總耗時: {latency_ms:.2f} ms")
+        # 📝 INFO：記錄總耗時
+        logger.info(f"[Total latency] {latency_ms:.2f} ms")
         
         try:
             usage = usage_data.get("usage")
             if usage:
-                print(f"[Token Usage] prompt={usage.prompt_tokens}, completion={usage.completion_tokens}, total={usage.total_tokens}")
+                # 📝 INFO：記錄 Token 使用量
+                logger.info(f"[Token Usage] prompt={usage.prompt_tokens}, completion={usage.completion_tokens}, total={usage.total_tokens}")
             log_id = await asyncio.to_thread(log_to_db, original_question, rephrased_question, full_answer, contexts_for_logging, latency_ms, usage)
         except Exception as e:
-            print(f"[ERROR] log_to_db failed in thread: {e}")
+            # 🚨 ERROR：寫入資料庫失敗
+            logger.error(f"[DB] log_to_db failed in thread: {e}", exc_info=True)
             log_id = None
 
         if log_id:

@@ -54,7 +54,8 @@ async def intent_classification(question: str, lang: str = 'zh') -> str:
         else:
             intent = "other"
     except Exception as e:
-        print(f"[Error] Intent classification failed: {e}")
+        # 🚨 ERROR：意圖分類失敗
+        print(f"[Intent] Intent classification failed: {e}")
         intent = "other"
 
     # 最後的安全檢查：確保 LLM 給的 intent 真的是我們有定義的

@@ -16,10 +16,14 @@ from fastapi.responses import StreamingResponse
 from answer import stream_chat_pipeline
 import admin_api
 from scheduler import start_scheduler
+from logger import get_logger
 
 # 建立 API Key 驗證器
 API_KEY_NAME = "X-API-Key"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=True)
+
+# 取得 logger 實例 (建立這個檔案專屬的 logger)
+logger = get_logger(__name__)
 
 async def verify_api_key(api_key_header: str = Security(api_key_header)):
     """檢查 API Key 是否正確"""
@@ -78,11 +82,14 @@ async def chat_endpoint(request: ChatRequest):
     Receives a user query and conversation history, processes it through the RAG pipeline,
     and returns a streaming response of the generated answer.
     """
-    print("--- [INFO] Received new chat stream request ---")
+    # 📝 INFO：記錄正常的請求進入
+    logger.info(f"[Chat] Received new chat stream request")
     
     async def event_generator():
         try:
-            print(f"--- [INFO] Processing query for stream: '{request.query}' in language '{request.lang}' ---")
+            
+            # 📝 INFO：記錄使用者的提問與語言
+            logger.info(f"[Chat] Processing query for stream: '{request.query}' in language '{request.lang}'")
             # The pipeline now yields events (content chunks or final data)
             async for event in stream_chat_pipeline(request.query, request.history or [], request.lang):
                 event_type = event.get("type")
@@ -104,8 +111,8 @@ async def chat_endpoint(request: ChatRequest):
                 # await asyncio.sleep(0.01)
 
         except Exception as e:
-            print(f"!!!!!! [ERROR] An exception occurred in stream: {e} !!!!!!!")
-            traceback.print_exc()
+            # 🚨 ERROR：發生嚴重錯誤。加上 exc_info=True 會自動幫你印出 traceback，不用再寫 traceback.print_exc() 了！
+            logger.error(f"[Stream] An exception occurred in stream: {e}", exc_info=True)
             # Optionally, send an error event to the client
             error_message = json.dumps({"type": "error", "data": "An error occurred on the server."})
             yield f"event: error\ndata: {error_message}\n\n"
@@ -117,7 +124,8 @@ async def feedback_endpoint(request: FeedbackRequest):
     """
     Receives user feedback and updates the corresponding log entry in the database.
     """
-    print(f"--- [INFO] Received feedback for log_id: {request.log_id} ---")
+    # 📝 INFO：記錄收到回饋
+    logger.info(f"[Feedback] Received feedback for log_id: {request.log_id}")
     # Move blocking DB operations into a sync helper and run it in a thread
     def _update_feedback(log_id: int, feedback_type: str | None, feedback_text: str | None):
         if not config.DB_POOL:
@@ -138,7 +146,8 @@ async def feedback_endpoint(request: FeedbackRequest):
             conn.commit()
             return True
         except psycopg2.Error as e:
-            print(f"!!!!!! [ERROR] Database error in /feedback helper: {e} !!!!!!!")
+            # 🚨 ERROR：資料庫寫入錯誤
+            logger.error(f"[DB] Database error in /feedback helper: {e}", exc_info=True)
             return False
         finally:
             if cursor:
@@ -153,7 +162,8 @@ async def feedback_endpoint(request: FeedbackRequest):
         # Use HTTPException to return proper status code
         raise HTTPException(status_code=500, detail="Failed to record feedback")
 
-    print(f"--- [INFO] Successfully updated feedback for log_id: {request.log_id} ---")
+    # 📝 INFO：記錄成功更新回饋
+    logger.info(f"[Feedback] Successfully updated feedback for log_id: {request.log_id}")
     return {"status": "success", "message": "Feedback recorded."}
 
 # --- Static Files and Schemas ---

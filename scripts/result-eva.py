@@ -56,7 +56,8 @@ def fetch_unevaluated_data():
         return rows
 
     except sqlite3.Error as e:
-        print(f"[DB Error] 無法讀取資料庫: {e}")
+        # 🚨 ERROR：資料庫讀取錯誤
+        print(f"[DB] 無法讀取資料庫: {e}")
         return []
     finally:
         if conn:
@@ -102,7 +103,8 @@ def update_scores_in_db(results_list):
         print(f"\n成功將 {len(records_to_update)} 筆評估分數更新至資料庫。")
 
     except sqlite3.Error as e:
-        print(f"\n[DB Error] 更新分數時出錯: {e}")
+        # 🚨 ERROR：資料庫更新錯誤
+        print(f"\n[DB] 更新分數時出錯: {e}")
     finally:
         if conn:
             conn.close()

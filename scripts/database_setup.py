@@ -86,7 +86,8 @@ def create_database_and_table():
         print(f"Database '{DB_NAME}', table '{TABLE_NAME}', and 'scholarships' table are set up successfully in PostgreSQL.")
 
     except psycopg2.Error as e:
-        print(f"Database error: {e}")
+        # 🚨 ERROR：資料庫建立錯誤
+        print(f"[DB] Database error: {e}")
     finally:
         if cursor:
             cursor.close()

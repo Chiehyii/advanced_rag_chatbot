@@ -1,6 +1,9 @@
 import os
 from dotenv import load_dotenv
 from psycopg2 import pool
+from logger import get_logger
+
+logger = get_logger(__name__)
 
 # 載入 .env 檔案
 load_dotenv()
@@ -41,6 +44,8 @@ ALLOWED_ORIGINS_LIST = [origin.strip() for origin in CORS_ALLOWED_ORIGINS.split(
 
 # 簡單檢查以確保關鍵環境變數已設定
 if not OPENAI_API_KEY or not ZILLIZ_API_KEY or not CLUSTER_ENDPOINT:
+    # 🚨 ERROR：記錄遺失關鍵環境變數
+    logger.error(" 遺失關鍵環境變數： OPENAI_API_KEY, ZILLIZ_API_KEY, 或 CLUSTER_ENDPOINT 必須被設定。")
     raise ValueError("遺失關鍵環境變數： OPENAI_API_KEY, ZILLIZ_API_KEY, 或 CLUSTER_ENDPOINT 必須被設定。")
 
 # --- Database Connection Pool ---
@@ -55,6 +60,8 @@ try:
         user=DB_USER,
         password=DB_PASSWORD
     )
-    print("--- [INFO] 資料庫連線池建立成功 ---")
+    # 📝 INFO：記錄資料庫連線池建立成功
+    logger.info("[DB] 資料庫連線池建立成功")
 except Exception as e:
-    print(f"!!!!!! [ERROR] 資料庫連線池建立失敗: {e} !!!!!!!")
+    # 🚨 ERROR：記錄資料庫連線池建立失敗
+    logger.error(f"[DB] 資料庫連線池建立失敗: {e}")
