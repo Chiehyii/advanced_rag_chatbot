@@ -12,11 +12,8 @@ from pymilvus import MilvusClient
 import config
 from prompts import PROMPTS
 
-from scripts.self_query import generate_milvus_expr
+from scripts.query_analyzer import analyze_query
 from sentence_transformers import CrossEncoder
-
-# 意圖分類
-from scripts.intent_classification import intent_classification
 
 # 引入 logger
 from logger import get_logger
@@ -45,7 +42,7 @@ async def get_embedding(text):
     )
     return resp.data[0].embedding
 
-async def retrieve_context(question: str, lang: str = 'zh', top_k: int = 20):
+async def retrieve_context(question: str, expr: str, lang: str = 'zh', top_k: int = 20):
     """根據問題進行混合檢索 (Dense + Sparse) + 過濾"""
     from pymilvus import AnnSearchRequest, RRFRanker
 
@@ -54,11 +51,6 @@ async def retrieve_context(question: str, lang: str = 'zh', top_k: int = 20):
 
     # 2. 產生問題的向量 (Sparse) - 使用 Server-side BM25 Function
     # 直接將問題文字傳送給 sparse field，Server 端會自動透過 Function 生成 Sparse Vector
-    
-    # 2. 透過 LLM 動態提取 metadata 過濾條件 (Self-Querying)
-    expr = await generate_milvus_expr(question)
-    # 📝 INFO：記錄動態提取的 Milvus 查詢條件
-    logger.info(f"[Self-Query] Milvus Dynamic Expr: '{expr}'")
 
     # 3. 執行混合檢索
     # Dense Request
@@ -428,19 +420,19 @@ async def stream_chat_pipeline(question: str, history: list | None = None, lang:
         logger.info(f"[Question] Final question: {rephrased_question} (Original: {original_question})")
 
         # --- 1. 先判斷意圖：決定是否需要動用資料庫 ---
-        intent = await intent_classification(rephrased_question, lang=lang)
+        intent, expr = await analyze_query(rephrased_question, lang=lang)
         # 📝 INFO：記錄辨識意圖
-        logger.info(f"[Intent] Intent: {intent}")
+        logger.info(f"[Intent] Intent: {intent}, Expr(filter): {expr}")
 
         cleaned_contexts = [] # 預設為空列表
 
         # 如果意圖不是 'other' 就去資料庫翻找資料
         if intent != 'other':
-            print(f"[Pipeline] Intent is '{intent}', retrieving documents...")
-            raw_contexts = await retrieve_context(rephrased_question, lang=lang)
+            logger.info(f"[Pipeline] Intent is '{intent}', retrieving documents (Milvus)...")
+            raw_contexts = await retrieve_context(rephrased_question, expr=expr, lang=lang)
             cleaned_contexts = log_and_clean_contexts(raw_contexts)
         else:
-            print(f"[Pipeline] Intent is '{intent}', skipping retrieval.")
+            logger.info(f"[Pipeline] Intent is '{intent}', skipping retrieval.")
         
         # ---2. 根據是否找到文件決定要走 RAG 還是 Small Talk ---
         if cleaned_contexts:
