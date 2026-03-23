@@ -42,7 +42,7 @@ async def get_embedding(text):
     )
     return resp.data[0].embedding
 
-async def retrieve_context(question: str, expr: str, lang: str = 'zh', top_k: int = 20):
+async def retrieve_context(question: str, expr: str, lang: str = 'zh', top_k: int = 15):
     """根據問題進行混合檢索 (Dense + Sparse) + 過濾"""
     from pymilvus import AnnSearchRequest, RRFRanker
 
