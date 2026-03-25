@@ -33,8 +33,12 @@ DB_NAME = os.getenv("DB_NAME")
 DB_USER = os.getenv("DB_USER")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
 
-# 加入自訂的 API Key 用於保護 FastAPI 端點
+# (已棄用) API Key — 已改用 Rate Limiting 保護公開端點
 API_SECRET_KEY = os.getenv("API_SECRET_KEY", "supersecretapikey123")
+
+# --- Rate Limiting ---
+RATE_LIMIT_CHAT = os.getenv("RATE_LIMIT_CHAT", "10/minute")
+RATE_LIMIT_FEEDBACK = os.getenv("RATE_LIMIT_FEEDBACK", "20/minute")
 
 # --- CORS ---
 # 從環境變數讀取允許的來源，預設為本地開發常用的來源

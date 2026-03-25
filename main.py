@@ -1,8 +1,7 @@
 import os
 import sys
 import config
-from fastapi import FastAPI, HTTPException, Depends, Security, status
-from fastapi.security import APIKeyHeader
+from fastapi import FastAPI, HTTPException, Request
 import asyncio
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -12,27 +11,20 @@ from typing import List, Optional
 import psycopg2
 import traceback
 import json
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from answer import stream_chat_pipeline
 import admin_api
 from scheduler import start_scheduler
 from logger import get_logger
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
-# 建立 API Key 驗證器
-API_KEY_NAME = "X-API-Key"
-api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=True)
+# 建立速率限制器（以 IP 為識別）
+limiter = Limiter(key_func=get_remote_address)
 
 # 取得 logger 實例 (建立這個檔案專屬的 logger)
 logger = get_logger(__name__)
-
-async def verify_api_key(api_key_header: str = Security(api_key_header)):
-    """檢查 API Key 是否正確"""
-    if api_key_header != config.API_SECRET_KEY:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid API Key",
-        )
-    return api_key_header
 
 # Add the project root to the Python path to allow imports from other files
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -44,6 +36,8 @@ app = FastAPI(
     description="An API for the Milvus RAG chatbot.",
     version="1.0.0",
 )
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 @app.on_event("startup")
 async def startup_event():
@@ -76,8 +70,9 @@ class FeedbackRequest(BaseModel):
 
 app.include_router(admin_api.router)
 
-@app.post("/chat", dependencies=[Depends(verify_api_key)])
-async def chat_endpoint(request: ChatRequest):
+@app.post("/chat")
+@limiter.limit(config.RATE_LIMIT_CHAT)
+async def chat_endpoint(request: Request, chat_request: ChatRequest):
     """
     Receives a user query and conversation history, processes it through the RAG pipeline,
     and returns a streaming response of the generated answer.
@@ -89,9 +84,9 @@ async def chat_endpoint(request: ChatRequest):
         try:
             
             # 📝 INFO：記錄使用者的提問與語言
-            logger.info(f"[Chat] Processing query for stream: '{request.query}' in language '{request.lang}'")
+            logger.info(f"[Chat] Processing query for stream: '{chat_request.query}' in language '{chat_request.lang}'")
             # The pipeline now yields events (content chunks or final data)
-            async for event in stream_chat_pipeline(request.query, request.history or [], request.lang):
+            async for event in stream_chat_pipeline(chat_request.query, chat_request.history or [], chat_request.lang):
                 event_type = event.get("type")
                 data = event.get("data")
 
@@ -119,13 +114,14 @@ async def chat_endpoint(request: ChatRequest):
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
-@app.post("/feedback", dependencies=[Depends(verify_api_key)])
-async def feedback_endpoint(request: FeedbackRequest):
+@app.post("/feedback")
+@limiter.limit(config.RATE_LIMIT_FEEDBACK)
+async def feedback_endpoint(request: Request, feedback_request: FeedbackRequest):
     """
     Receives user feedback and updates the corresponding log entry in the database.
     """
     # 📝 INFO：記錄收到回饋
-    logger.info(f"[Feedback] Received feedback for log_id: {request.log_id}")
+    logger.info(f"[Feedback] Received feedback for log_id: {feedback_request.log_id}")
     # Move blocking DB operations into a sync helper and run it in a thread
     def _update_feedback(log_id: int, feedback_type: str | None, feedback_text: str | None):
         if not config.DB_POOL:
@@ -157,13 +153,13 @@ async def feedback_endpoint(request: FeedbackRequest):
                 config.DB_POOL.putconn(conn)
 
     # Run the DB update in a thread to avoid blocking the event loop
-    ok = await asyncio.to_thread(_update_feedback, request.log_id, request.feedback_type, request.feedback_text)
+    ok = await asyncio.to_thread(_update_feedback, feedback_request.log_id, feedback_request.feedback_type, feedback_request.feedback_text)
     if not ok:
         # Use HTTPException to return proper status code
         raise HTTPException(status_code=500, detail="Failed to record feedback")
 
     # 📝 INFO：記錄成功更新回饋
-    logger.info(f"[Feedback] Successfully updated feedback for log_id: {request.log_id}")
+    logger.info(f"[Feedback] Successfully updated feedback for log_id: {feedback_request.log_id}")
     return {"status": "success", "message": "Feedback recorded."}
 
 # --- Static Files and Schemas ---
