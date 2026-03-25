@@ -331,10 +331,13 @@ async def generate_answer_stream(question: str, cleaned_contexts: list, lang: st
             source_url_map[fname] = c.get('source_url')
 
     context_for_llm = ""
-    for fname, texts in grouped.items():
+    # 🌟 優化點 1：加入 enumerate 產生索引編號 [1], [2]...
+    for idx, (fname, texts) in enumerate(grouped.items(), 1):
         title = fname.replace('.md', '').replace('.txt', '')
         url = source_url_map.get(fname, '')
-        context_for_llm += f"\n---\n來源名稱: {title}\n"
+        
+        # 🌟 將編號 [idx] 加入提示詞中
+        context_for_llm += f"\n---\n[文件 {idx}]\n來源名稱: {title}\n"
         if url:
             context_for_llm += f"來源網址: {url}\n"
         full_text = "\n".join(texts)
@@ -436,56 +439,26 @@ async def stream_chat_pipeline(question: str, history: list | None = None, lang:
         
         # ---2. 根據是否找到文件決定要走 RAG 還是 Small Talk ---
         if cleaned_contexts:
-            # --- RAG path: we have relevant documents ---
-            # 📝 INFO：記錄找到的文件數量
             logger.info(f"[RAG] RAG path: {len(cleaned_contexts)} relevant documents found.")
 
             llm_stream = generate_answer_stream(rephrased_question, cleaned_contexts, lang=lang, usage_data=usage_data)
-            buffer = ""
-            delimiter = "|||SOURCES|||"
-
+            
+            # 🌟 優化點 2：移除複雜的 Buffer 截斷邏輯，直接無腦 Yield
             async for chunk in llm_stream:
                 full_answer += chunk
-                buffer += chunk
+                yield {"type": "content", "data": chunk} # 直接串流文字給前端
 
-                if delimiter in buffer:
-                    answer_part, _ = buffer.split(delimiter, 1)
-                    yield {"type": "content", "data": answer_part}
-                    async for remaining_chunk in llm_stream:
-                        full_answer += remaining_chunk
-                    break
-                else:
-                    if len(buffer) > len(delimiter):
-                        yield_part = buffer[:-len(delimiter)]
-                        yield {"type": "content", "data": yield_part}
-                        buffer = buffer[-len(delimiter):]
-            else:
-                if buffer:
-                    yield {"type": "content", "data": buffer}
-
-            answer_part = full_answer
-            cited_source_names = []
-            if "|||SOURCES|||" in full_answer:
-                parts = full_answer.split("|||SOURCES|||")
-                answer_part = parts[0].strip()
-                source_names_str = parts[1].strip()
-                if source_names_str:
-                    cited_source_names = [name.strip() for name in source_names_str.split(',')]
-            
-            full_answer = answer_part
-
-            cited_source_names_set = set(cited_source_names)
-            all_cited_contexts = [ctx for ctx in cleaned_contexts if ctx.get('source_file') in cited_source_names_set]
-            contexts_for_logging = all_cited_contexts
-
+            # 🌟 優化點 3：不需要再用字串切割來尋找 cited_source_names 了
+            # 直接將所有用來回答的 contexts 回傳給前端，前端透過 [1], [2] 來對應
             unique_display_contexts = []
             seen_keys = set()
-            for context in all_cited_contexts:
+            for context in cleaned_contexts:
                 unique_key = context.get('source_file')
                 if unique_key and unique_key not in seen_keys:
                     unique_display_contexts.append(context)
                     seen_keys.add(unique_key)
             
+            contexts_for_logging = unique_display_contexts # 用於寫入資料庫
             result_data = {"contexts": unique_display_contexts}
             
             # Predict next questions

@@ -17,8 +17,44 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
   const t = translations[language];
   const [feedbackState, setFeedbackState] = useState<'like' | 'dislike' | null>(null);
 
-  const createMarkup = (text: string) => {
-    return { __html: DOMPurify.sanitize(marked.parse(text) as string) };
+  // 修改 createMarkup，讓它接收 contexts 陣列
+  const createMarkup = (text: string, ctxs: any[]) => {
+    // 1. 先把 Markdown 轉成 HTML，避免 marked 把之後注入的 HTML 標籤當文字跳脫
+    const rawHtml = marked.parse(text) as string;
+
+    // 2. 再對 HTML 字串做引用標籤替換 [1] → Tooltip 結構
+    const processedHtml = rawHtml.replace(/\[(\d+)\]/g, (match, num) => {
+      const idx = parseInt(num) - 1;
+      const ctx = ctxs && ctxs[idx] ? ctxs[idx] : null;
+
+      // 如果找不到對應的文件，就保持原樣
+      if (!ctx) return `<sup class="inline-citation">${match}</sup>`;
+
+      // 取得網址、標題與內容片段
+      let url = ctx.source_url || '#';
+      if (url !== '#' && !url.startsWith('http')) {
+        url = 'https://' + url;
+      }
+      const title = ctx.source_file || t.unknown_source;
+      const domain = url !== '#' ? new URL(url).hostname : '';
+      // 產生 Tooltip 結構 (<a> 標籤負責點擊前往，後面的 span 是 Hover 卡片)
+      return `
+        <span class="citation-wrapper">
+          <a href="${url}" target="_blank" rel="noopener noreferrer" class="inline-citation">
+            <sup>[${num}]</sup>
+          </a>
+          <span class="citation-tooltip">
+            <span class="tooltip-title">${title}</span>
+            ${domain ? `<span class="tooltip-url">${domain}</span>` : ''}
+          </span>
+        </span>
+      `;
+    });
+
+    // 3. 確保 DOMPurify 允許我們新增的屬性 (target, rel, class)
+    return {
+      __html: DOMPurify.sanitize(processedHtml, { ADD_ATTR: ['target', 'rel', 'class'] })
+    };
   };
 
   if (role === 'user') {
@@ -34,9 +70,10 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
       <div className="bot-message-content">
         <div className="message-body">
           <div className="bot-left-col">
+            {/* 3. 記得把 onClick={handleMessageClick} 移除，並且把 contexts 傳給 createMarkup */}
             <div
               className={`message bot-message ${isStreaming && !content ? 'thinking' : ''}`}
-              dangerouslySetInnerHTML={content ? createMarkup(content) : { __html: 'Thinking...' }}
+              dangerouslySetInnerHTML={content ? createMarkup(content, contexts || []) : { __html: 'Thinking...' }}
             />
             {logId && !isStreaming && (
               <div className="feedback-buttons">
@@ -87,7 +124,16 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
                   const displaySnippet = (ctx.text || '').replace(/<[^>]*>?/gm, '');
 
                   return (
-                    <a key={idx} href={url} target="_blank" rel="noopener noreferrer" className="context-card-link" title={ctx.source_file || 'Unknown'}>
+                    // 4. 在 <a> 標籤上加入動態 id，注意這裡的 index 是 idx + 1，因為標籤是從 [1] 開始
+                    <a
+                      key={idx}
+                      id={`context-card-${logId || 'temp'}-${idx + 1}`}
+                      href={url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="context-card-link"
+                      title={ctx.source_file || 'Unknown'}
+                    >
                       <div className="context-card">
                         <div className="context-card-title">{ctx.source_file || t.unknown_source}</div>
                         <div className="context-card-text">{displaySnippet}</div>

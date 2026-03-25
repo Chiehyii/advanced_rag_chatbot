@@ -251,7 +251,12 @@ body {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  transition: background-color 0.2s ease;
+  transition: background-color 0.2s ease, transform 0.2s ease;
+}
+
+.context-card:active {
+  transform: scale(0.96);
+  background-color: rgba(0, 0, 0, 0.1);
 }
 
 .context-card:hover {
@@ -343,7 +348,7 @@ body {
   font-size: 0.9em;
   background-color: #ffffff;
   border-radius: 8px;
-  overflow: hidden;
+  overflow: visible;
   box-shadow: 0 0 0 1px var(--border-color);
 }
 
@@ -769,4 +774,95 @@ body {
     padding-right: 0;
     /* Remove right padding restriction */
   }
+
+  /* 手機版：隱藏 tooltip，因為觸控裝置沒有 hover，直接點擊連結即可 */
+  .citation-tooltip {
+    display: none;
+  }
+}
+
+/* ----------------------------------
+   行內引用與浮動卡片 (Tooltip) 樣式
+----------------------------------- */
+
+/* 外層容器：用來定位 Tooltip */
+.citation-wrapper {
+  position: relative;
+  display: inline-block;
+}
+
+/* 取消 a 標籤預設樣式，讓它變成精緻的小按鈕 */
+a.inline-citation {
+  text-decoration: none;
+  color: var(--link-color, #1a73e8);
+  margin: 0 2px;
+}
+
+a.inline-citation sup {
+  background-color: rgba(26, 115, 232, 0.1);
+  padding: 0.1em 0.3em 0.3em 0.3em;
+  border-radius: 4px;
+  font-size: 0.75em;
+  font-weight: 700;
+  transition: all 0.2s ease;
+}
+
+a.inline-citation:hover sup {
+  background-color: var(--link-color, #1a73e8);
+  color: white;
+}
+
+/* 浮動卡片 (預設隱藏) */
+.citation-tooltip {
+  visibility: hidden;
+  opacity: 0;
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%) translateY(10px);
+
+  width: 200px;
+  background-color: white;
+  border: 1px solid #e1e4e8;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  padding: 8px 10px;
+  z-index: 1000;
+
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+  line-height: 1.4;
+
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  pointer-events: none;
+}
+
+/* 當滑鼠 Hover 到整個 Wrapper 時，顯示下方的卡片 */
+.citation-wrapper:hover .citation-tooltip {
+  visibility: visible;
+  opacity: 1;
+  transform: translateX(-50%) translateY(5px);
+}
+
+/* 卡片內的文字設計 */
+.tooltip-title {
+  font-weight: 600;
+  font-size: 0.8rem;
+  color: #1a1a1a;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.tooltip-url {
+  font-size: 0.7rem;
+  color: #1a73e8;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
