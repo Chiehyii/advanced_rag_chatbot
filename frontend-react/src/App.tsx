@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { ChatHeader } from './components/ChatHeader';
 import { MessageList } from './components/MessageList';
 import { ChatInput } from './components/ChatInput';
@@ -93,6 +93,9 @@ function App() {
   });
   const [language, setLanguage] = useState<Language>('zh');
   const [isLoading, setIsLoading] = useState(false);
+  // [PERF-4] RAF handle 用於批次更新串流內容，避免每個 token 就觸發一次 re-render
+  const rafRef = useRef<number | null>(null);
+  const fullAnswerRef = useRef<string>(''); // 持綌最新的 fullAnswer，供 RAF closure 使用
 
   // Feedback state
   const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
@@ -153,6 +156,7 @@ function App() {
         let done = false;
         let buffer = '';
         let fullAnswer = '';
+        fullAnswerRef.current = ''; // [PERF-4] 重置 ref
 
         while (!done) {
           const { value, done: readerDone } = await reader.read();
@@ -165,6 +169,11 @@ function App() {
 
             for (const line of lines) {
               if (line.startsWith('event: end_stream')) {
+                // [PERF-4] 尾區到達前先沖溅剩餘的 RAF
+                if (rafRef.current !== null) {
+                  cancelAnimationFrame(rafRef.current);
+                  rafRef.current = null;
+                }
                 const dataLine = line.substring(line.indexOf('data: ') + 6);
                 if (dataLine.trim()) {
                   try {
@@ -201,16 +210,23 @@ function App() {
                   // Fallback for raw text
                   fullAnswer += chunk;
                 }
+                fullAnswerRef.current = fullAnswer; // [PERF-4] 每個 token 都同步更新 ref
 
-                // Update the last message content with the stream
-                setMessages(prev => {
-                  const newMessages = [...prev];
-                  const lastIdx = newMessages.length - 1;
-                  if (newMessages[lastIdx].role === 'assistant') {
-                    newMessages[lastIdx].content = fullAnswer;
-                  }
-                  return newMessages;
-                });
+                // [PERF-4] 用 RAF 批次更新，同一幀(約 16ms)內收到多個 token 時合並為一次 re-render
+                if (rafRef.current === null) {
+                  rafRef.current = requestAnimationFrame(() => {
+                    rafRef.current = null;
+                    const latest = fullAnswerRef.current; // 讀取最新內容
+                    setMessages(prev => {
+                      const newMessages = [...prev];
+                      const lastIdx = newMessages.length - 1;
+                      if (newMessages[lastIdx].role === 'assistant') {
+                        newMessages[lastIdx] = { ...newMessages[lastIdx], content: latest };
+                      }
+                      return newMessages;
+                    });
+                  });
+                }
               } else if (line.startsWith('event: error')) {
                 throw new Error('Server-side error during streaming.');
               }
@@ -233,6 +249,11 @@ function App() {
         return newMessages;
       });
     } finally {
+      // [PERF-4] 確保离開時清除殘餘的 RAF
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
       setIsLoading(false);
     }
   };

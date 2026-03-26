@@ -6,9 +6,10 @@ from bs4 import BeautifulSoup
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor, as_completed  # [PERF-3] 並行爬取
 
 import config
-from admin_api import get_db_connection, release_db_connection, openai_client, init_milvus_collection, emb_text
+from admin_api import get_db_connection, release_db_connection, openai_client, init_milvus_collection, emb_text, emb_texts_batch  # [PERF-1]
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 import random
 
@@ -111,27 +112,26 @@ def process_scholarship_update(row, new_hash, new_text):
         
         # Insert new chunks
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-        chunks = text_splitter.split_text(extracted_data.get('markdown_content', ''))
+        chunks = [c.strip() for c in text_splitter.split_text(extracted_data.get('markdown_content', '')) if c.strip()]
         
-        data_to_insert = []
-        for chunk in chunks:
-            if not chunk.strip(): continue
-            chunk_id = random.randint(1, 9223372036854775806)
+        if chunks:
+            # [PERF-1] 批次嵌入
+            vectors = emb_texts_batch(chunks)
             source_name = extracted_data.get('title') or title or "unknown_scholarship"
-            data_to_insert.append({
-                "id": chunk_id,
-                "text": chunk.strip(),
-                "source_file": source_name + ".md",
-                "source_path": scholarship_code,
-                "source_url": url,
-                "identity": extracted_data.get('identity', []),
-                "education_system": extracted_data.get('education_system', []),
-                "category": [extracted_data.get('category', '')] if extracted_data.get('category', '') else [],
-                "tags": extracted_data.get('tags', []),
-                "vector": emb_text(chunk.strip())
-            })
-            
-        if data_to_insert:
+            data_to_insert = []
+            for chunk, vector in zip(chunks, vectors):
+                data_to_insert.append({
+                    "id": random.randint(1, 9223372036854775806),
+                    "text": chunk,
+                    "source_file": source_name + ".md",
+                    "source_path": scholarship_code,
+                    "source_url": url,
+                    "identity": extracted_data.get('identity', []),
+                    "education_system": extracted_data.get('education_system', []),
+                    "category": [extracted_data.get('category', '')] if extracted_data.get('category', '') else [],
+                    "tags": extracted_data.get('tags', []),
+                    "vector": vector
+                })
             milvus_client.insert(collection_name=collection_name, data=data_to_insert)
             milvus_client.flush(collection_name=collection_name)
             
@@ -147,34 +147,64 @@ def run_inspection():
         cursor = conn.cursor()
         cursor.execute("SELECT scholarship_code, title, link, content_hash FROM scholarships WHERE link IS NOT NULL AND link != '';")
         rows = cursor.fetchall()
-        
-        for row in rows:
-            scholarship_code, title, url, old_hash = row
-            
-            # Scrape latest
-            latest_text = scrape_url_text(url)
-            if not latest_text:
-                continue
-                
-            new_hash = compute_md5(latest_text)
-            
-            if old_hash != new_hash:
-                print(f"[Scheduler] Content change detected for {title} ({url})")
-                process_scholarship_update(row, new_hash, latest_text)
-            else:
-                # Just update last checked time
-                try:
-                    c2 = conn.cursor()
-                    now = datetime.now(timezone.utc)
-                    c2.execute("UPDATE scholarships SET last_checked_at = %s WHERE scholarship_code = %s", (now.isoformat(), scholarship_code))
-                    conn.commit()
-                except Exception as e:
-                    print(f"Failed to update last_checked: {e}")
-                    
     except Exception as e:
-        print(f"[Scheduler] Inspection failed: {e}")
+        print(f"[Scheduler] Inspection failed to fetch rows: {e}")
+        release_db_connection(conn)
+        return
     finally:
-        release_db_connection(conn)  # [SEC-3] 歸還連線池
+        if 'cursor' in locals() and cursor:
+            cursor.close()
+
+    if not rows:
+        release_db_connection(conn)
+        return
+
+    # [PERF-3] 並行爬取所有網址，透過線程池同時發請求
+    # 50 筆 × 串行3s = 150s  vs  50 筆 × 並行(5線程) = ~30s
+    print(f"[Scheduler] Scraping {len(rows)} URLs concurrently (max 5 workers)...")
+    
+    def scrape_row(row):
+        scholarship_code, title, url, old_hash = row
+        latest_text = scrape_url_text(url)
+        return row, latest_text
+
+    scraped_results = []
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(scrape_row, row): row for row in rows}
+        for future in as_completed(futures):
+            try:
+                row, latest_text = future.result()
+                scraped_results.append((row, latest_text))
+            except Exception as e:
+                print(f"[Scheduler] Scrape error for {futures[future][2]}: {e}")
+
+    # 爬取完成後，依序處理有變化的項目
+    changed_count = 0
+    for row, latest_text in scraped_results:
+        scholarship_code, title, url, old_hash = row
+        if not latest_text:
+            continue
+            
+        new_hash = compute_md5(latest_text)
+        
+        if old_hash != new_hash:
+            print(f"[Scheduler] Content change detected for {title} ({url})")
+            changed_count += 1
+            process_scholarship_update(row, new_hash, latest_text)
+        else:
+            try:
+                update_conn = get_db_connection()
+                c2 = update_conn.cursor()
+                now = datetime.now(timezone.utc)
+                c2.execute("UPDATE scholarships SET last_checked_at = %s WHERE scholarship_code = %s", (now.isoformat(), scholarship_code))
+                update_conn.commit()
+                c2.close()
+                release_db_connection(update_conn)
+            except Exception as e:
+                print(f"Failed to update last_checked for {title}: {e}")
+    
+    release_db_connection(conn)
+    print(f"[Scheduler] Inspection complete. {changed_count}/{len(scraped_results)} changed.")
 
 
 def start_scheduler():
