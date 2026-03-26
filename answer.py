@@ -203,28 +203,16 @@ async def retrieve_context(question: str, expr: str, lang: str = 'zh', top_k: in
 
 def log_and_clean_contexts(retrieved_docs: list):
     """
-    將檢索結果打印到控制台，並返回一個清理過的、可序列化的列表。
+    [CODE-3] 將檢索結果記錄到日誌系統，並回傳一個清理過的、可序列化的列表。
     """
-    print("\n=== RAG檢索結果 ===")
     if not retrieved_docs:
-        # 📝 INFO：記錄檢索結果為空
         logger.info("[RAG] No documents retrieved.")
-        # print("（沒有檢索到任何結果）")
         return []
 
     cleaned_contexts = []
     for i, res in enumerate(retrieved_docs, 1):
         entity = res.get("entity", {})
-        
-        # fallback to distance if score isn't present
         score = res.get("cross_encoder_score", res.get("distance", 0.0))
-        
-        # 📝 INFO：記錄檢索結果
-        # logger.info(f"[RAG] Retrieved document {i}: {entity.get('text', '')[:100]}... (Score: {score:.4f}, Source: {entity.get('source_file', 'N/A')})")
-        # print(f"結果 {i}:")
-        # print(f"內容: {entity.get('text', '')[:100]}...")
-        # print(f"相似度: {score:.4f}, 來源: {entity.get('source_file', 'N/A')}")
-        # print("-" * 50)
 
         identity = entity.get("identity")
         category = entity.get("category")

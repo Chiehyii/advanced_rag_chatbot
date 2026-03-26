@@ -1,4 +1,5 @@
 import time
+import uuid
 import hashlib
 import requests
 import json
@@ -9,9 +10,10 @@ from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed  # [PERF-3] 並行爬取
 
 import config
-from admin_api import get_db_connection, release_db_connection, openai_client, init_milvus_collection, emb_text, emb_texts_batch  # [PERF-1]
+from admin_api import get_db_connection, release_db_connection, openai_client, init_milvus_collection, emb_texts_batch  # [CODE-2]
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-import random
+from logger import get_logger
+logger = get_logger(__name__)
 
 def compute_md5(text: str) -> str:
     return hashlib.md5(text.encode('utf-8')).hexdigest()
@@ -22,7 +24,7 @@ def scrape_url_text(url: str) -> str:
         soup = BeautifulSoup(resp.content, "html.parser")
         return soup.get_text(separator="\n", strip=True)
     except Exception as e:
-        print(f"[Scheduler] Failed to scrape {url}: {e}")
+        logger.warning(f"[Scheduler] Failed to scrape {url}: {e}")
         return ""
 
 def ask_ai_to_extract(url: str, content: str) -> dict:
@@ -121,7 +123,7 @@ def process_scholarship_update(row, new_hash, new_text):
             data_to_insert = []
             for chunk, vector in zip(chunks, vectors):
                 data_to_insert.append({
-                    "id": random.randint(1, 9223372036854775806),
+                    "id": uuid.uuid4().int >> 64,  # [CODE-2] UUID 確保唯一性
                     "text": chunk,
                     "source_file": source_name + ".md",
                     "source_path": scholarship_code,
@@ -132,23 +134,24 @@ def process_scholarship_update(row, new_hash, new_text):
                     "tags": extracted_data.get('tags', []),
                     "vector": vector
                 })
+
             milvus_client.insert(collection_name=collection_name, data=data_to_insert)
             milvus_client.flush(collection_name=collection_name)
             
-        print(f"[Scheduler] Successfully updated Milvus chunks for {title}")
+        logger.info(f"[Scheduler] Successfully updated Milvus chunks for {title}")
     except Exception as e:
-        print(f"[Scheduler] Milvus Update failed: {e}")
+        logger.error(f"[Scheduler] Milvus Update failed: {e}", exc_info=True)
 
 
 def run_inspection():
-    print(f"\n[Scheduler] Running scholarship inspection at {datetime.now().isoformat()}")
+    logger.info(f"\n[Scheduler] Running scholarship inspection at {datetime.now().isoformat()}")
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
         cursor.execute("SELECT scholarship_code, title, link, content_hash FROM scholarships WHERE link IS NOT NULL AND link != '';")
         rows = cursor.fetchall()
     except Exception as e:
-        print(f"[Scheduler] Inspection failed to fetch rows: {e}")
+        logger.error(f"[Scheduler] Inspection failed to fetch rows: {e}", exc_info=True)
         release_db_connection(conn)
         return
     finally:
@@ -161,7 +164,7 @@ def run_inspection():
 
     # [PERF-3] 並行爬取所有網址，透過線程池同時發請求
     # 50 筆 × 串行3s = 150s  vs  50 筆 × 並行(5線程) = ~30s
-    print(f"[Scheduler] Scraping {len(rows)} URLs concurrently (max 5 workers)...")
+    logger.info(f"[Scheduler] Scraping {len(rows)} URLs concurrently (max 5 workers)...")
     
     def scrape_row(row):
         scholarship_code, title, url, old_hash = row
@@ -176,7 +179,7 @@ def run_inspection():
                 row, latest_text = future.result()
                 scraped_results.append((row, latest_text))
             except Exception as e:
-                print(f"[Scheduler] Scrape error for {futures[future][2]}: {e}")
+                logger.warning(f"[Scheduler] Scrape error for {futures[future][2]}: {e}")
 
     # 爬取完成後，依序處理有變化的項目
     changed_count = 0
@@ -201,10 +204,10 @@ def run_inspection():
                 c2.close()
                 release_db_connection(update_conn)
             except Exception as e:
-                print(f"Failed to update last_checked for {title}: {e}")
+                logger.warning(f"Failed to update last_checked for {title}: {e}")
     
     release_db_connection(conn)
-    print(f"[Scheduler] Inspection complete. {changed_count}/{len(scraped_results)} changed.")
+    logger.info(f"[Scheduler] Inspection complete. {changed_count}/{len(scraped_results)} changed.")
 
 
 def start_scheduler():
@@ -212,4 +215,4 @@ def start_scheduler():
     # Run every 12 hours
     scheduler.add_job(run_inspection, IntervalTrigger(minutes=720), id='scholarship_inspection')
     scheduler.start()
-    print("[Scheduler] Started background automated inspection.")
+    logger.info("[Scheduler] Started background automated inspection.")
