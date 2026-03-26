@@ -13,19 +13,25 @@ import config
 from prompts import PROMPTS
 
 from scripts.query_analyzer import analyze_query
-from sentence_transformers import CrossEncoder
+# from sentence_transformers import CrossEncoder
+from fastembed.rerank.cross_encoder import TextCrossEncoder
 
 # 引入 logger
 from logger import get_logger
 logger = get_logger(__name__)
 
+import math
+
 # --- Constants ---
-MIN_RERANK_SCORE = 0.3  # Minimum Cross-Encoder score to keep a document
+MIN_RERANK_SCORE = 0.2  # Minimum Cross-Encoder score to keep a document
 
 # --- Initialize Re-Ranking Model ---
 # Using a lightweight, multilingual reranker widely used for RAG (bge-reranker-base or M3)
 # Note: First startup will download the model.
-cross_encoder = CrossEncoder('BAAI/bge-reranker-base', max_length=512)
+# cross_encoder = CrossEncoder('BAAI/bge-reranker-base', max_length=512)
+print("[Init] 正在載入 ONNX 版本的 Re-ranker 模型...")
+cross_encoder = TextCrossEncoder(model_name="BAAI/bge-reranker-base")
+
 
 # 使用集中化的設定來初始化 clients
 openai_client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
@@ -42,7 +48,7 @@ async def get_embedding(text):
     )
     return resp.data[0].embedding
 
-async def retrieve_context(question: str, expr: str, lang: str = 'zh', top_k: int = 15):
+async def retrieve_context(question: str, expr: str, lang: str = 'zh', top_k: int = 20):
     """根據問題進行混合檢索 (Dense + Sparse) + 過濾"""
     from pymilvus import AnnSearchRequest, RRFRanker
 
@@ -166,28 +172,44 @@ async def retrieve_context(question: str, expr: str, lang: str = 'zh', top_k: in
     # 📝 INFO：記錄 Cross-Encoder Re-Ranking
     logger.info(f"[Re-Ranking] Milvus returned {len(milvus_docs)} candidate documents. Starting Cross-Encoder scoring...")
     
-    # Prepare pairs for scoring: (question, document_text)
-    pairs = []
-    for doc in milvus_docs:
-        doc_text = doc.get("entity", {}).get("text", "")
-        pairs.append([question, doc_text])
-        
-    if not pairs:
+    if not milvus_docs:
         return []
 
-    # Run predictions in a thread since model inference is blocking
+    # FastEmbed 只需要 query 和單純的 document text
+    documents = [doc.get("entity", {}).get("text", "") for doc in milvus_docs]
+
+    # 在執行緒中跑推理, 避免阻塞
     def _rank():
-        return cross_encoder.predict(pairs)
+        # rerank 回傳的是一個 generator, 轉成 list 方便操作
+        return list(cross_encoder.rerank(question, documents))
         
-    scores = await asyncio.to_thread(_rank)
-    
-    # Attach scores to documents and sort descending
-    for i, doc in enumerate(milvus_docs):
-        doc["cross_encoder_score"] = float(scores[i])
+    rerank_results = await asyncio.to_thread(_rank)
+
+    # 綁定分數並排序
+    for i, res in enumerate(rerank_results):
+        # 由於 FastEmbed 回傳的是物件, 我們安全的抓取 score 屬性
+        # 萬用抓分法: 處理 fastembed 可能回傳的各種格式
+        if hasattr(res, 'score'):
+            score = float(res.score)
+        elif isinstance(res, dict) and 'score' in res:
+            score = float(res['score'])
+        else:
+            try:
+                # 如果 res 直接就是數字(float)或陣列(array)
+                score = float(res)
+            except Exception:
+                score = 0.0
+
+        # 使用 Sigmoid 函數，把任何數字轉換成 0.0 ~ 1.0 的機率值
+        score = 1 / (1 + math.exp(-score))
+
+        # 加入這行, 看看 ONNX 現在到底給這篇文章打幾分
+        logger.info(f"[Re-Ranking] Document {i+1}: {score:.4f} -> 轉換後機率 {score:.4f}")
+        milvus_docs[i]["cross_encoder_score"] = score
         
     milvus_docs.sort(key=lambda x: x["cross_encoder_score"], reverse=True)
     
-    # Pick the Top 5 most relevant, then filter by minimum score threshold
+    # 取 top5 並過濾門檻
     top_n = min(5, len(milvus_docs))
     refined_docs = [d for d in milvus_docs[:top_n] if d["cross_encoder_score"] >= MIN_RERANK_SCORE]
     
@@ -331,13 +353,10 @@ async def generate_answer_stream(question: str, cleaned_contexts: list, lang: st
             source_url_map[fname] = c.get('source_url')
 
     context_for_llm = ""
-    # 🌟 優化點 1：加入 enumerate 產生索引編號 [1], [2]...
-    for idx, (fname, texts) in enumerate(grouped.items(), 1):
+    for fname, texts in grouped.items():
         title = fname.replace('.md', '').replace('.txt', '')
         url = source_url_map.get(fname, '')
-        
-        # 🌟 將編號 [idx] 加入提示詞中
-        context_for_llm += f"\n---\n[文件 {idx}]\n來源名稱: {title}\n"
+        context_for_llm += f"\n---\n來源名稱: {title}\n"
         if url:
             context_for_llm += f"來源網址: {url}\n"
         full_text = "\n".join(texts)
@@ -414,7 +433,6 @@ async def stream_chat_pipeline(question: str, history: list | None = None, lang:
     contexts_for_logging = []
     result_data = {}
     usage_data = {}  # Mutable container to capture streaming token usage
-    stream_completed = False  # [BUG-4] 旗標：只有完整串流後才寫入 DB
 
     try:
         if history:
@@ -424,15 +442,9 @@ async def stream_chat_pipeline(question: str, history: list | None = None, lang:
         logger.info(f"[Question] Final question: {rephrased_question} (Original: {original_question})")
 
         # --- 1. 先判斷意圖：決定是否需要動用資料庫 ---
-        try:
-            intent, expr = await analyze_query(rephrased_question, lang=lang)
-            # 📝 INFO：記錄辨識意圖
-            logger.info(f"[Intent] Intent: {intent}, Expr(filter): {expr}")
-        except Exception as analyze_err:
-            # [BUG-6] analyze_query API 失敗時，降級為不帶 filter 的 RAG 搜尋
-            # 比靜默回傳 'other' 更好：使用者問獎學金，至少還能嘗試檢索
-            logger.warning(f"[Intent] analyze_query failed ({type(analyze_err).__name__}), falling back to unfiltered RAG search.")
-            intent, expr = "scholarship", ""
+        intent, expr = await analyze_query(rephrased_question, lang=lang)
+        # 📝 INFO：記錄辨識意圖
+        logger.info(f"[Intent] Intent: {intent}, Expr(filter): {expr}")
 
         cleaned_contexts = [] # 預設為空列表
 
@@ -446,26 +458,56 @@ async def stream_chat_pipeline(question: str, history: list | None = None, lang:
         
         # ---2. 根據是否找到文件決定要走 RAG 還是 Small Talk ---
         if cleaned_contexts:
+            # --- RAG path: we have relevant documents ---
+            # 📝 INFO：記錄找到的文件數量
             logger.info(f"[RAG] RAG path: {len(cleaned_contexts)} relevant documents found.")
 
             llm_stream = generate_answer_stream(rephrased_question, cleaned_contexts, lang=lang, usage_data=usage_data)
-            
-            # 🌟 優化點 2：移除複雜的 Buffer 截斷邏輯，直接無腦 Yield
+            buffer = ""
+            delimiter = "|||SOURCES|||"
+
             async for chunk in llm_stream:
                 full_answer += chunk
-                yield {"type": "content", "data": chunk} # 直接串流文字給前端
+                buffer += chunk
 
-            # 🌟 優化點 3：不需要再用字串切割來尋找 cited_source_names 了
-            # 直接將所有用來回答的 contexts 回傳給前端，前端透過 [1], [2] 來對應
+                if delimiter in buffer:
+                    answer_part, _ = buffer.split(delimiter, 1)
+                    yield {"type": "content", "data": answer_part}
+                    async for remaining_chunk in llm_stream:
+                        full_answer += remaining_chunk
+                    break
+                else:
+                    if len(buffer) > len(delimiter):
+                        yield_part = buffer[:-len(delimiter)]
+                        yield {"type": "content", "data": yield_part}
+                        buffer = buffer[-len(delimiter):]
+            else:
+                if buffer:
+                    yield {"type": "content", "data": buffer}
+
+            answer_part = full_answer
+            cited_source_names = []
+            if "|||SOURCES|||" in full_answer:
+                parts = full_answer.split("|||SOURCES|||")
+                answer_part = parts[0].strip()
+                source_names_str = parts[1].strip()
+                if source_names_str:
+                    cited_source_names = [name.strip() for name in source_names_str.split(',')]
+            
+            full_answer = answer_part
+
+            cited_source_names_set = set(cited_source_names)
+            all_cited_contexts = [ctx for ctx in cleaned_contexts if ctx.get('source_file') in cited_source_names_set]
+            contexts_for_logging = all_cited_contexts
+
             unique_display_contexts = []
             seen_keys = set()
-            for context in cleaned_contexts:
+            for context in all_cited_contexts:
                 unique_key = context.get('source_file')
                 if unique_key and unique_key not in seen_keys:
                     unique_display_contexts.append(context)
                     seen_keys.add(unique_key)
             
-            contexts_for_logging = unique_display_contexts # 用於寫入資料庫
             result_data = {"contexts": unique_display_contexts}
             
             # Predict next questions
@@ -497,30 +539,24 @@ async def stream_chat_pipeline(question: str, history: list | None = None, lang:
             chips = await generate_suggested_replies(rephrased_question, full_answer, lang=lang)
             result_data = {"contexts": [], "chips": chips}
 
-        stream_completed = True  # [BUG-4] 到這裡代表兩個串流都完整接收完畢
-
     finally:
         end_time = time.time()
         latency_ms = (end_time - start_time) * 1000
         # 📝 INFO：記錄總耗時
         logger.info(f"[Total latency] {latency_ms:.2f} ms")
         
-        # [BUG-4] 只有串流完整完成才寫入 DB，避免因客戶端中途斷線導致不完整資料汙染分析
-        if stream_completed:
-            try:
-                usage = usage_data.get("usage")
-                if usage:
-                    # 📝 INFO：記錄 Token 使用量
-                    logger.info(f"[Token Usage] prompt={usage.prompt_tokens}, completion={usage.completion_tokens}, total={usage.total_tokens}")
-                log_id = await asyncio.to_thread(log_to_db, original_question, rephrased_question, full_answer, contexts_for_logging, latency_ms, usage)
-            except Exception as e:
-                # 🚨 ERROR：寫入資料庫失敗
-                logger.error(f"[DB] log_to_db failed in thread: {e}", exc_info=True)
-                log_id = None
+        try:
+            usage = usage_data.get("usage")
+            if usage:
+                # 📝 INFO：記錄 Token 使用量
+                logger.info(f"[Token Usage] prompt={usage.prompt_tokens}, completion={usage.completion_tokens}, total={usage.total_tokens}")
+            log_id = await asyncio.to_thread(log_to_db, original_question, rephrased_question, full_answer, contexts_for_logging, latency_ms, usage)
+        except Exception as e:
+            # 🚨 ERROR：寫入資料庫失敗
+            logger.error(f"[DB] log_to_db failed in thread: {e}", exc_info=True)
+            log_id = None
 
-            if log_id:
-                result_data["log_id"] = log_id
-        else:
-            logger.warning(f"[DB] Stream did not complete (client disconnected?), skipping DB log.")
+        if log_id:
+            result_data["log_id"] = log_id
         
         yield {"type": "final_data", "data": result_data}

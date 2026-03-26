@@ -32,7 +32,7 @@ export const translations = {
     example_question_6: "學校有提供證照獎勵補助嗎?",
     example_question_7: "就學貸款辦理資訊",
     example_question_8: "碩士班外籍生可以申請獎助學金嗎？",
-    example_question_9: "學術論文發表的獎勵補助",
+    example_question_9: "學術論文發表有甚麼補助?",
     example_question_10: "參加校外競賽可申請的獎學金",
     example_question_11: "大學部原住民可以申請甚麼獎助學金?",
     example_question_12: "弱勢助學",
@@ -66,11 +66,11 @@ export const translations = {
     example_question_5: "I am going on an overseas exchange and volunteer service in the second semester of my junior year. Does the school offer any subsidies?",
     example_question_6: "Does the school offer any certification or license incentives or subsidies?",
     example_question_7: "Student loan application information",
-    example_question_8: "Can international students in master's programs  ",
-    example_question_9: "Rewards and subsidies for publishing academic papers",
+    example_question_8: "Can international students in master's programs apply for scholarships?",
+    example_question_9: "What subsidies are available for publishing academic papers?",
     example_question_10: "Scholarships for participating in external competitions",
     example_question_11: "What scholarships are available for aboriginal students in the undergraduate level?",
-    example_question_12: "What can I apply for with a low-income status?",
+    example_question_12: "Grants for Disadvantaged Students",
     reference_title: "References:",
     unknown_source: "Unknown source",
     chat_notice: "TCU Scholarship Chat may produce errors, please verify the responses.",
@@ -139,7 +139,6 @@ function App() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-API-Key': 'supersecretapikey123'  // 替換成你的金鑰
         },
         body: JSON.stringify({ query: text, history, lang: language })
       });
@@ -294,7 +293,7 @@ function App() {
                 isLoading={isLoading}
                 onSendMessage={handleSendMessage}
                 onClearChat={handleClearChat}
-                onHelp={() => window.open('https://oia.tcu.edu.trim', '_blank')}
+                onHelp={() => window.open('https://oia.tcu.edu.tw', '_blank')}
                 language={language}
                 isInitial={true}
               />
@@ -333,7 +332,7 @@ function App() {
                 isLoading={isLoading}
                 onSendMessage={handleSendMessage}
                 onClearChat={handleClearChat}
-                onHelp={() => window.open('https://oia.tcu.edu.trim', '_blank')}
+                onHelp={() => window.open('https://oia.tcu.edu.tw', '_blank')}
                 language={language}
               />
             </>
