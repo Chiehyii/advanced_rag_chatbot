@@ -1,4 +1,5 @@
 import os
+import re
 import uuid
 import json
 import random
@@ -71,13 +72,16 @@ def verify_admin(token: str = Depends(oauth2_scheme)):
 
 # --- Helper functions ---
 def get_db_connection():
-    return psycopg2.connect(
-        host=config.DB_HOST,
-        port=config.DB_PORT,
-        dbname=config.DB_NAME,
-        user=config.DB_USER,
-        password=config.DB_PASSWORD
-    )
+    """[SEC-3] 從共用連線池借用連線，避免每次請求都建立新連線。"""
+    if not config.DB_POOL:
+        raise HTTPException(status_code=503, detail="Database connection pool is not available.")
+    return config.DB_POOL.getconn()
+
+def release_db_connection(conn):
+    """[SEC-3] 將連線歸還連線池。必須在 finally 區塊中呼叫。"""
+    if conn and config.DB_POOL:
+        config.DB_POOL.putconn(conn)
+
 
 def emb_text(text: str):
     return (
@@ -183,6 +187,18 @@ def _parse_json_array(value):
     except (json.JSONDecodeError, TypeError):
         return []
 
+def validate_scholarship_code(scholarship_code: str) -> str:
+    """
+    [SEC-2] 白名單驗證 scholarship_code，防止 Milvus filter 字串注入。
+    只允許英數字、連字符和底線，拒絕所有特殊字元。
+    """
+    if not re.match(r'^[a-zA-Z0-9\-_]+$', scholarship_code):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid scholarship_code format: '{scholarship_code}'. Only alphanumeric characters, hyphens, and underscores are allowed."
+        )
+    return scholarship_code
+
 @router.get("/scholarships")
 def list_scholarships(current_admin: str = Depends(verify_admin)):
     try:
@@ -210,10 +226,11 @@ def list_scholarships(current_admin: str = Depends(verify_admin)):
         if 'cursor' in locals() and cursor:
             cursor.close()
         if 'conn' in locals() and conn:
-            conn.close()
+            release_db_connection(conn)
 
 @router.get("/scholarships/{scholarship_code}")
 def get_scholarship(scholarship_code: str, current_admin: str = Depends(verify_admin)):
+    scholarship_code = validate_scholarship_code(scholarship_code)  # [SEC-2]
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -246,7 +263,7 @@ def get_scholarship(scholarship_code: str, current_admin: str = Depends(verify_a
         if 'cursor' in locals() and cursor:
             cursor.close()
         if 'conn' in locals() and conn:
-            conn.close()
+            release_db_connection(conn)
 
 @router.post("/extract_info")
 def extract_scholarship_info(request: ExtractRequest, current_admin: str = Depends(verify_admin)):
@@ -352,7 +369,7 @@ def save_scholarship(form: ScholarshipForm, current_admin: str = Depends(verify_
         if 'cursor' in locals() and cursor:
             cursor.close()
         if 'conn' in locals() and conn:
-            conn.close()
+            release_db_connection(conn)
 
     # 2. Insert vector chunks into Milvus
     try:
@@ -393,6 +410,7 @@ def save_scholarship(form: ScholarshipForm, current_admin: str = Depends(verify_
 
 @router.put("/scholarships/{scholarship_code}")
 def update_scholarship(scholarship_code: str, form: ScholarshipForm, current_admin: str = Depends(verify_admin)):
+    scholarship_code = validate_scholarship_code(scholarship_code)  # [SEC-2]
     # This acts very similarly to save_scholarship but handles Milvus cleanup first
     
     # 1. Save to PostgreSQL
@@ -426,7 +444,7 @@ def update_scholarship(scholarship_code: str, form: ScholarshipForm, current_adm
         if 'cursor' in locals() and cursor:
             cursor.close()
         if 'conn' in locals() and conn:
-            conn.close()
+            release_db_connection(conn)
 
     # 2. Re-Insert vector chunks into Milvus
     try:
@@ -473,6 +491,7 @@ def update_scholarship(scholarship_code: str, form: ScholarshipForm, current_adm
 
 @router.delete("/scholarships/{scholarship_code}")
 def delete_scholarship(scholarship_code: str, current_admin: str = Depends(verify_admin)):
+    scholarship_code = validate_scholarship_code(scholarship_code)  # [SEC-2]
     # 1. Delete from PostgreSQL
     try:
         conn = get_db_connection()
@@ -485,7 +504,7 @@ def delete_scholarship(scholarship_code: str, current_admin: str = Depends(verif
         if 'cursor' in locals() and cursor:
             cursor.close()
         if 'conn' in locals() and conn:
-            conn.close()
+            release_db_connection(conn)
 
     # 2. Delete from Milvus
     try:

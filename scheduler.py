@@ -8,7 +8,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from datetime import datetime, timezone
 
 import config
-from admin_api import get_db_connection, openai_client, init_milvus_collection, emb_text
+from admin_api import get_db_connection, release_db_connection, openai_client, init_milvus_collection, emb_text
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 import random
 
@@ -99,7 +99,7 @@ def process_scholarship_update(row, new_hash, new_text):
         print(f"[Scheduler] DB Update failed: {e}")
         return
     finally:
-        conn.close()
+        release_db_connection(conn)  # [SEC-3] 歸還連線池
 
     # 2. Update Milvus
     try:
@@ -174,7 +174,7 @@ def run_inspection():
     except Exception as e:
         print(f"[Scheduler] Inspection failed: {e}")
     finally:
-        conn.close()
+        release_db_connection(conn)  # [SEC-3] 歸還連線池
 
 
 def start_scheduler():

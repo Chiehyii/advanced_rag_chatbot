@@ -14,9 +14,11 @@ OPENAI_MODEL_NAME = os.getenv("OPENAI_MODEL_NAME", "gpt-4o-mini")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
 
 # --- Authentication & Security ---
-ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "supersecretpassword123")
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "c416f5c88b770ab7fbe51fc525a1f6a1")
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+if not ADMIN_PASSWORD or not JWT_SECRET_KEY:
+    raise ValueError("ADMIN_PASSWORD and JWT_SECRET_KEY must be set in environment variables.")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 # 1 day
 
@@ -34,7 +36,7 @@ DB_USER = os.getenv("DB_USER")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
 
 # (已棄用) API Key — 已改用 Rate Limiting 保護公開端點
-API_SECRET_KEY = os.getenv("API_SECRET_KEY", "supersecretapikey123")
+API_SECRET_KEY = os.getenv("API_SECRET_KEY")
 
 # --- Rate Limiting ---
 RATE_LIMIT_CHAT = os.getenv("RATE_LIMIT_CHAT", "10/minute")
@@ -54,6 +56,7 @@ if not OPENAI_API_KEY or not ZILLIZ_API_KEY or not CLUSTER_ENDPOINT:
 
 # --- Database Connection Pool ---
 # 建立一個連線池，避免每次請求都重新建立連線
+DB_POOL = None  # 先初始化為 None，避免連線失敗時 AttributeError
 try:
     DB_POOL = pool.ThreadedConnectionPool(
         minconn=1,
@@ -67,5 +70,5 @@ try:
     # 📝 INFO：記錄資料庫連線池建立成功
     logger.info("[DB] 資料庫連線池建立成功")
 except Exception as e:
-    # 🚨 ERROR：記錄資料庫連線池建立失敗
+    # 🚨 ERROR：記錄資料庫連線池建立失敗（DB_POOL 維持 None）
     logger.error(f"[DB] 資料庫連線池建立失敗: {e}")
