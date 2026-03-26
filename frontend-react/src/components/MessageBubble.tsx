@@ -17,6 +17,19 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
   const t = translations[language];
   const [feedbackState, setFeedbackState] = useState<'like' | 'dislike' | null>(null);
 
+  // [SEC-5] 使用 URL 建構子驗證協議，防止 javascript: / data: 等惡意 URL
+  const sanitizeUrl = (raw: string | undefined | null): string => {
+    if (!raw || raw === '#') return '#';
+    try {
+      const normalized = raw.startsWith('http') ? raw : 'https://' + raw;
+      const parsed = new URL(normalized);
+      // 只允許 https 和 http 協議，其他一律顯示安全的佔位符
+      return ['https:', 'http:'].includes(parsed.protocol) ? parsed.href : '#';
+    } catch {
+      return '#'; // URL 格式錯誤時也安全降級
+    }
+  };
+
   // 修改 createMarkup，讓它接收 contexts 陣列
   const createMarkup = (text: string, ctxs: any[]) => {
     // 1. 先把 Markdown 轉成 HTML，避免 marked 把之後注入的 HTML 標籤當文字跳脫
@@ -31,10 +44,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
       if (!ctx) return `<sup class="inline-citation">${match}</sup>`;
 
       // 取得網址、標題與內容片段
-      let url = ctx.source_url || '#';
-      if (url !== '#' && !url.startsWith('http')) {
-        url = 'https://' + url;
-      }
+      const url = sanitizeUrl(ctx.source_url);  // [SEC-5]
       const title = ctx.source_file || t.unknown_source;
       const domain = url !== '#' ? new URL(url).hostname : '';
       // 產生 Tooltip 結構 (<a> 標籤負責點擊前往，後面的 span 是 Hover 卡片)
@@ -116,10 +126,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
               <h4>{t.reference_title}</h4>
               <div className="context-cards-list">
                 {contexts.map((ctx, idx) => {
-                  let url = ctx.source_url || '#';
-                  if (url !== '#' && !url.startsWith('http')) {
-                    url = 'https://' + url;
-                  }
+                  const url = sanitizeUrl(ctx.source_url);  // [SEC-5]
                   const domain = url !== '#' ? new URL(url).hostname : '';
                   const displaySnippet = (ctx.text || '').replace(/<[^>]*>?/gm, '');
 

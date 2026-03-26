@@ -6,8 +6,10 @@ import random
 import requests
 from bs4 import BeautifulSoup
 from typing import List, Optional
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from pydantic import BaseModel
 import psycopg2
 from openai import OpenAI
@@ -21,6 +23,9 @@ from passlib.context import CryptContext
 
 router = APIRouter(prefix="/api", tags=["admin"])
 openai_client = OpenAI(api_key=config.OPENAI_API_KEY)
+
+# [SEC-4] 管理後台專屬的速率限制器
+limiter = Limiter(key_func=get_remote_address)
 
 # --- Models ---
 class ExtractRequest(BaseModel):
@@ -162,7 +167,8 @@ def init_milvus_collection():
 # --- Endpoints ---
 
 @router.post("/login")
-async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+@limiter.limit("5/minute")  # [SEC-4] 防止暴力破解，每個 IP 每分鐘最多嘗試 5 次
+async def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
     if form_data.username != config.ADMIN_USERNAME or form_data.password != config.ADMIN_PASSWORD:
         raise HTTPException(
             status_code=401,
