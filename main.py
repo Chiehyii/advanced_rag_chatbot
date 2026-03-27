@@ -6,7 +6,7 @@ import asyncio
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional
 import psycopg2
 import traceback
@@ -55,10 +55,13 @@ app.add_middleware(
 # --- Pydantic Models for Request and Response ---
 
 class ChatRequest(BaseModel):
-    """Request model for a user's chat query."""
-    query: str
-    history: List[dict] | None = None
-    lang: Optional[str] = 'zh'
+    """[OPT-3] Request model for a user's chat query — with length limits to prevent token abuse."""
+    query: str = Field(..., min_length=1, max_length=1000,
+                       description="The user's question. Max 1000 characters.")
+    history: List[dict] | None = Field(None, max_length=20,
+                                       description="Chat history. Max 20 messages.")
+    lang: Optional[str] = Field('zh', pattern='^(zh|en)$',
+                                description="Language code: 'zh' or 'en' only.")
 
 class FeedbackRequest(BaseModel):
     """Request model for submitting feedback."""

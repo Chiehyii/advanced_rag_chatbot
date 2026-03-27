@@ -503,21 +503,12 @@ def update_scholarship(scholarship_code: str, form: ScholarshipForm, current_adm
 @router.delete("/scholarships/{scholarship_code}")
 def delete_scholarship(scholarship_code: str, current_admin: str = Depends(verify_admin)):
     scholarship_code = validate_scholarship_code(scholarship_code)  # [SEC-2]
-    # 1. Delete from PostgreSQL
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM scholarships WHERE scholarship_code = %s", (scholarship_code,))
-        conn.commit()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"DB Error: {str(e)}")
-    finally:
-        if 'cursor' in locals() and cursor:
-            cursor.close()
-        if 'conn' in locals() and conn:
-            release_db_connection(conn)
 
-    # 2. Delete from Milvus
+    # [OPT-4] 先刪 Milvus 向量，確認成功後再刪 PostgreSQL
+    # 原因：若先刪 DB 再刪 Milvus，Milvus 失敗 → 殭屍向量（查得到文件但找不到來源）
+    # 現在：Milvus 失敗 → DB 記錄保留 → 可安全重試，無資料不一致問題
+
+    # 1. 先刪除 Milvus 向量（失敗時 DB 記錄仍安全保留）
     try:
         milvus_client, collection_name = init_milvus_collection()
         milvus_client.delete(
@@ -525,9 +516,23 @@ def delete_scholarship(scholarship_code: str, current_admin: str = Depends(verif
             filter=f"source_path == '{scholarship_code}'"
         )
         milvus_client.flush(collection_name=collection_name)
-        return {"status": "success", "message": "Successfully deleted from DB and Knowledge Base"}
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Vector DB Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Vector DB Error (DB record preserved): {str(e)}")
+
+    # 2. Milvus 刪除成功後，再刪 PostgreSQL
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM scholarships WHERE scholarship_code = %s", (scholarship_code,))
+        conn.commit()
+        return {"status": "success", "message": "Successfully deleted from Knowledge Base and DB"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"DB Error (vectors already removed): {str(e)}")
+    finally:
+        if 'cursor' in locals() and cursor:
+            cursor.close()
+        if 'conn' in locals() and conn:
+            release_db_connection(conn)
+
+
 

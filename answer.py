@@ -3,6 +3,7 @@ import psycopg2
 import time
 import json
 import asyncio
+import tiktoken  # [OPT-1] Token 預算管理
 from pydantic import BaseModel
 
 from openai import AsyncOpenAI
@@ -18,6 +19,27 @@ from sentence_transformers import CrossEncoder
 # 引入 logger
 from logger import get_logger
 logger = get_logger(__name__)
+
+# [OPT-1] 初始化 tiktoken encoder，用於計算 token 數量
+_tokenizer = tiktoken.get_encoding("cl100k_base")
+_HISTORY_TOKEN_BUDGET = 2500  # 留下足够空間給 RAG context 和回答
+
+def _trim_history_to_budget(history: list, budget: int = _HISTORY_TOKEN_BUDGET) -> list:
+    """
+    [OPT-1] 將對話歷史中超出 token 預算的早期訊息逐一刪除，
+    避免最後 8 條訊息加起來超出模型 context window 造成 API 失敗。
+    策略：從case 最新的訊息開始往前填，直到超出預算為止。
+    """
+    selected = []
+    total_tokens = 0
+    for msg in reversed(history):
+        text = f"{msg.get('role', '')}: {msg.get('content', '')}"
+        tokens = len(_tokenizer.encode(text))
+        if total_tokens + tokens > budget:
+            break
+        selected.append(msg)
+        total_tokens += tokens
+    return list(reversed(selected))
 
 # --- Constants ---
 MIN_RERANK_SCORE = 0.3  # Minimum Cross-Encoder score to keep a document
@@ -279,7 +301,12 @@ async def _rephrase_question_with_history(history: list, question: str, lang: st
     if not history:
         return question
 
-    history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in history[-8:]])
+    # [OPT-1] 動態截取歷史，确保不超出 token 預算
+    trimmed_history = _trim_history_to_budget(history)
+    if not trimmed_history:
+        # 即便是最新一條訊息也超出預算，直接回傳原問題
+        return question
+    history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in trimmed_history])
     system_prompt = PROMPTS[lang]['rephrase_system']
     user_prompt = PROMPTS[lang]['rephrase_user'].format(history_str=history_str, question=question)
 
@@ -377,7 +404,7 @@ async def generate_suggested_replies(question: str, answer: str, lang: str = 'zh
     
     try:
         response = await openai_client.beta.chat.completions.parse(
-            model="gpt-4o-mini",
+            model=config.OPENAI_MODEL_NAME,  # [OPT-2] 使用 config 而非硬編碼 "gpt-4o-mini"
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"User: {question}\n\nAssistant: {answer}"}
