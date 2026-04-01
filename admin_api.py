@@ -131,7 +131,7 @@ def _insert_chunks_to_milvus(
     for chunk, vector in zip(chunks, vectors):
         data_to_insert.append({
             # [CODE-2] 使用 UUID 確保唯一性，取代有潜在碰撞風險的 random.randint
-            "id": uuid.uuid4().int >> 65,
+            "id": uuid.uuid4().int >> 65, # 右移 65 位確保結果 ≤ 2^63-1（Milvus INT64 上限）但如果數據預計會超過 1,000 萬筆 id可能會有重複的風險，建議使用 uuid.uuid4().int >> 64並重建milvus collection id 欄位= varchar
             "text": chunk,
             "source_file": title + ".md",
             "source_path": scholarship_code,

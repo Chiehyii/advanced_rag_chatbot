@@ -67,7 +67,7 @@ body {
 }
 
 .logo {
-    width: 36px;
+    /* width: 36px;
     height: 36px;
     background: linear-gradient(135deg, var(--accent), #38bdf8);
     border-radius: 10px;
@@ -77,7 +77,7 @@ body {
     font-size: 18px;
     color: white;
     font-weight: bold;
-    box-shadow: 0 4px 10px var(--accent-glow);
+    box-shadow: 0 4px 10px var(--accent-glow); */
 }
 
 .sidebar-header h2 {
@@ -702,11 +702,7 @@ textarea {
 }
 
 .login-box .logo.large {
-    width: 60px;
-    height: 60px;
-    font-size: 30px;
     margin-bottom: 24px;
-    border-radius: 16px;
 }
 
 .login-box h2 {

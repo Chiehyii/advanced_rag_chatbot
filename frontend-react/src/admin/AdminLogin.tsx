@@ -27,7 +27,7 @@ export function AdminLogin({ onLoginSuccess }: AdminLoginProps) {
     return (
         <div className="login-overlay active">
             <div className="login-box glass-panel">
-                <div className="logo large">✦</div>
+                <div className="logo large"><img src="/school_logo.png" alt="School Logo" className="header-logo" /></div>
                 <h2>管理員登入</h2>
                 <p>請輸入您的帳號密碼以繼續</p>
                 <form onSubmit={handleSubmit}>
