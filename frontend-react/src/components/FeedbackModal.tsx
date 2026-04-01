@@ -25,21 +25,21 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({ isOpen, onClose, o
     <>
       <div id="feedback-backdrop" style={{ display: 'block' }} onClick={onClose}></div>
       <div id="feedback-modal" style={{ display: 'block' }}>
-          <h3>{t.feedback_title}</h3>
-          <p>{t.feedback_prompt}</p>
-          <form id="feedback-form" onSubmit={handleSubmit}>
-              <textarea 
-                id="feedback-textarea" 
-                placeholder={t.feedback_placeholder}
-                required
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-              />
-              <div style={{ textAlign: 'right' }}>
-                  <button type="button" id="close-feedback-btn" onClick={onClose}>{t.cancel_button}</button>
-                  <button type="submit">{t.submit_button}</button>
-              </div>
-          </form>
+        <h3>{t.feedback_title}</h3>
+        <p>{t.feedback_prompt}</p>
+        <form id="feedback-form" onSubmit={handleSubmit}>
+          <textarea
+            id="feedback-textarea"
+            placeholder={t.feedback_placeholder}
+            required
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+          />
+          <div style={{ textAlign: 'right' }}>
+            <button type="button" id="close-feedback-btn" onClick={onClose}>{t.cancel_button}</button>
+            <button type="submit">{t.submit_button}</button>
+          </div>
+        </form>
       </div>
     </>
   );

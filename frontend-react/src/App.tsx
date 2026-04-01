@@ -1,13 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
+import { Routes, Route } from 'react-router-dom';
 import { ChatHeader } from './components/ChatHeader';
 import { MessageList } from './components/MessageList';
 import { ChatInput } from './components/ChatInput';
 import { FeedbackModal } from './components/FeedbackModal';
 import { Message, Language } from './types';
+import { AdminApp } from './admin/AdminApp';
 import './index.css';
-
 const CHAT_STORAGE_KEY = 'tcu_scholarship_chat_history';
-
 // --- i18n Dictionaries ---
 export const translations = {
   zh: {
@@ -81,7 +81,6 @@ export const translations = {
     show_less: "Show less"
   }
 };
-
 function App() {
   const [messages, setMessages] = useState<Message[]>(() => {
     try {
@@ -96,11 +95,9 @@ function App() {
   // [PERF-4] RAF handle 用於批次更新串流內容，避免每個 token 就觸發一次 re-render
   const rafRef = useRef<number | null>(null);
   const fullAnswerRef = useRef<string>(''); // 持綌最新的 fullAnswer，供 RAF closure 使用
-
   // Feedback state
   const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
   const [currentFeedbackLogId, setCurrentFeedbackLogId] = useState<string | null>(null);
-
   // Persist messages to sessionStorage whenever they change
   useEffect(() => {
     // Only save completed (non-streaming) messages
@@ -111,7 +108,6 @@ function App() {
       console.warn('Failed to save chat history to sessionStorage:', e);
     }
   }, [messages]);
-
   const handleSendMessage = async (text: string) => {
     // Hide prediction chips from the last bot message before responding
     setMessages(prev => {
@@ -124,19 +120,15 @@ function App() {
       }
       return updatedMessages;
     });
-
     // Add user message
     const newMessage = { role: 'user', content: text } as Message;
     setMessages(prev => [...prev, newMessage]);
     setIsLoading(true);
-
     // Prepare history payload for API
     const history = messages.map(msg => ({ role: msg.role, content: msg.content }));
     history.push({ role: 'user', content: text });
-
     // Add empty placeholder for bot streaming
     setMessages(prev => [...prev, { role: 'assistant', content: '', isStreaming: true }]);
-
     try {
       const response = await fetch('/chat', {
         method: 'POST',
@@ -145,11 +137,9 @@ function App() {
         },
         body: JSON.stringify({ query: text, history, lang: language })
       });
-
       if (!response.ok) {
         throw new Error('Network response was not ok');
       }
-
       if (response.body) {
         const reader = response.body.getReader();
         const decoder = new TextDecoder('utf-8');
@@ -157,16 +147,13 @@ function App() {
         let buffer = '';
         let fullAnswer = '';
         fullAnswerRef.current = ''; // [PERF-4] 重置 ref
-
         while (!done) {
           const { value, done: readerDone } = await reader.read();
           done = readerDone;
-
           if (value) {
             buffer += decoder.decode(value, { stream: true });
             const lines = buffer.split('\n\n');
             buffer = lines.pop() || ''; // keep incomplete line
-
             for (const line of lines) {
               if (line.startsWith('event: end_stream')) {
                 // [PERF-4] 尾區到達前先沖溅剩餘的 RAF
@@ -200,7 +187,6 @@ function App() {
                 }
               } else if (line.startsWith('data: ')) {
                 const chunk = line.substring(6);
-
                 try {
                   const parsed = JSON.parse(chunk);
                   if (parsed.type === 'content') {
@@ -211,7 +197,6 @@ function App() {
                   fullAnswer += chunk;
                 }
                 fullAnswerRef.current = fullAnswer; // [PERF-4] 每個 token 都同步更新 ref
-
                 // [PERF-4] 用 RAF 批次更新，同一幀(約 16ms)內收到多個 token 時合並為一次 re-render
                 if (rafRef.current === null) {
                   rafRef.current = requestAnimationFrame(() => {
@@ -257,7 +242,6 @@ function App() {
       setIsLoading(false);
     }
   };
-
   const handleClearChat = () => {
     setMessages([]);
     try {
@@ -266,7 +250,6 @@ function App() {
       console.warn('Failed to clear chat history from sessionStorage:', e);
     }
   };
-
   const handleFeedback = async (logId: string, type: 'like' | 'dislike' | null) => {
     // Send feedback to backend
     await fetch('/feedback', {
@@ -274,16 +257,13 @@ function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ log_id: logId, feedback_type: type })
     }).catch(err => console.error("Error sending feedback:", err));
-
     if (type === 'dislike') {
       setCurrentFeedbackLogId(logId);
       setIsFeedbackOpen(true);
     }
   };
-
   const handleFeedbackSubmit = async (feedbackText: string) => {
     if (!currentFeedbackLogId) return;
-
     await fetch('/feedback', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -296,79 +276,76 @@ function App() {
     setIsFeedbackOpen(false);
     setCurrentFeedbackLogId(null);
   };
-
   const isInitialState = messages.length === 0;
   const t = translations[language];
-
   return (
-    <>
-      <div id="main-layout" style={{ display: 'flex', flexGrow: 1, width: '100%', overflow: 'hidden' }}>
-        <div id="chat-side" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, width: '100%', position: 'relative' }}>
-
-          <ChatHeader language={language} onLanguageChange={setLanguage} />
-
-          {isInitialState ? (
-            <div className="hero-container">
-              <div className="hero-title">{t.welcome_title}</div>
-              <ChatInput
-                isLoading={isLoading}
-                onSendMessage={handleSendMessage}
-                onClearChat={handleClearChat}
-                onHelp={() => window.open('https://oia.tcu.edu.tw', '_blank')}
-                language={language}
-                isInitial={true}
-              />
-              <div className="example-questions-container initial-chips">
-                {[
-                  t.example_question_1,
-                  t.example_question_2,
-                  t.example_question_3,
-                  t.example_question_4,
-                  t.example_question_5,
-                  t.example_question_6,
-                  t.example_question_7,
-                  t.example_question_8,
-                  t.example_question_9,
-                  t.example_question_10,
-                  t.example_question_11,
-                  t.example_question_12
-
-                ].map((q, idx) => (
-                  <div key={idx} className="example-question" onClick={() => handleSendMessage(q)}>
-                    {q}
+    <Routes>
+      <Route path="/admin/*" element={<AdminApp />} />
+      <Route path="*" element={
+        <>
+          <div id="main-layout" style={{ display: 'flex', flexGrow: 1, width: '100%', overflow: 'hidden' }}>
+            <div id="chat-side" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, width: '100%', position: 'relative' }}>
+              <ChatHeader language={language} onLanguageChange={setLanguage} />
+              {isInitialState ? (
+                <div className="hero-container">
+                  <div className="hero-title">{t.welcome_title}</div>
+                  <ChatInput
+                    isLoading={isLoading}
+                    onSendMessage={handleSendMessage}
+                    onClearChat={handleClearChat}
+                    onHelp={() => window.open('https://oia.tcu.edu.tw', '_blank')}
+                    language={language}
+                    isInitial={true}
+                  />
+                  <div className="example-questions-container initial-chips">
+                    {[
+                      t.example_question_1,
+                      t.example_question_2,
+                      t.example_question_3,
+                      t.example_question_4,
+                      t.example_question_5,
+                      t.example_question_6,
+                      t.example_question_7,
+                      t.example_question_8,
+                      t.example_question_9,
+                      t.example_question_10,
+                      t.example_question_11,
+                      t.example_question_12
+                    ].map((q, idx) => (
+                      <div key={idx} className="example-question" onClick={() => handleSendMessage(q)}>
+                        {q}
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+                </div>
+              ) : (
+                <>
+                  <MessageList
+                    messages={messages}
+                    onFeedback={handleFeedback}
+                    onChipClick={handleSendMessage}
+                    language={language}
+                  />
+                  <ChatInput
+                    isLoading={isLoading}
+                    onSendMessage={handleSendMessage}
+                    onClearChat={handleClearChat}
+                    onHelp={() => window.open('https://oia.tcu.edu.tw', '_blank')}
+                    language={language}
+                  />
+                </>
+              )}
             </div>
-          ) : (
-            <>
-              <MessageList
-                messages={messages}
-                onFeedback={handleFeedback}
-                onChipClick={handleSendMessage}
-                language={language}
-              />
-
-              <ChatInput
-                isLoading={isLoading}
-                onSendMessage={handleSendMessage}
-                onClearChat={handleClearChat}
-                onHelp={() => window.open('https://oia.tcu.edu.tw', '_blank')}
-                language={language}
-              />
-            </>
-          )}
-        </div>
-      </div>
-
-      <FeedbackModal
-        isOpen={isFeedbackOpen}
-        onClose={() => setIsFeedbackOpen(false)}
-        onSubmit={handleFeedbackSubmit}
-        language={language}
-      />
-    </>
+          </div>
+          <FeedbackModal
+            isOpen={isFeedbackOpen}
+            onClose={() => setIsFeedbackOpen(false)}
+            onSubmit={handleFeedbackSubmit}
+            language={language}
+          />
+        </>
+      } />
+    </Routes>
   );
 }
-
 export default App;

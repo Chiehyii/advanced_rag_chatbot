@@ -19,9 +19,9 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({ language, onLanguageChan
         </div>
         <div className="language-switcher-container">
           <label htmlFor="language-switcher">Language:</label>
-          <select 
-            id="language-switcher" 
-            value={language} 
+          <select
+            id="language-switcher"
+            value={language}
             onChange={(e) => onLanguageChange(e.target.value as Language)}
           >
             <option value="zh">繁體中文</option>

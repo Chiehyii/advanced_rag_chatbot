@@ -1,6 +1,5 @@
 import getpass
 import bcrypt
-
 def generate_hash():
     
     print("This script will generate a bcrypt hash of your admin password.")
@@ -35,6 +34,5 @@ def generate_hash():
     print("2. Paste it into your .env file.")
     print("3. Comment out or delete ADMIN_PASSWORD from your .env file.")
     print("4. Restart your application.")
-
 if __name__ == "__main__":
     generate_hash()

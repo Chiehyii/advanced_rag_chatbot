@@ -131,7 +131,7 @@ def _insert_chunks_to_milvus(
     for chunk, vector in zip(chunks, vectors):
         data_to_insert.append({
             # [CODE-2] 使用 UUID 確保唯一性，取代有潜在碰撞風險的 random.randint
-            "id": uuid.uuid4().int >> 64,
+            "id": uuid.uuid4().int >> 65,
             "text": chunk,
             "source_file": title + ".md",
             "source_path": scholarship_code,

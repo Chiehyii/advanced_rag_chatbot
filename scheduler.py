@@ -127,7 +127,7 @@ def process_scholarship_update(row, new_hash, new_text):
             data_to_insert = []
             for chunk, vector in zip(chunks, vectors):
                 data_to_insert.append({
-                    "id": uuid.uuid4().int >> 64,  # [CODE-2] UUID 確保唯一性
+                    "id": uuid.uuid4().int >> 65,  # [CODE-2] UUID 確保唯一性
                     "text": chunk,
                     "source_file": source_name + ".md",
                     "source_path": scholarship_code,

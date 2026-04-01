@@ -79,13 +79,13 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onClearChat
         <div className="chat-notice">{t.chat_notice}</div>
         <div className="utility-buttons">
           <button type="button" id="clear-button" title={t.clear_chat_button_title || t.clear_chat_button} onClick={onClearChat}>
-             {t.clear_chat_button}
+            {t.clear_chat_button}
           </button>
           <button type="button" id="help-button" title={t.help_button_title || t.help_button} onClick={() => {
             alert(t.help_alert);
             onHelp();
           }}>
-             {t.help_button}
+            {t.help_button}
           </button>
         </div>
       </form>
