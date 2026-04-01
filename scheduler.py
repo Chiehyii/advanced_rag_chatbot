@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed  # [PERF-3] 並�
 import config
 from admin_api import get_db_connection, release_db_connection, openai_client, init_milvus_collection, emb_texts_batch  # [CODE-2]
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from utils import is_safe_url
 from logger import get_logger
 logger = get_logger(__name__)
 
@@ -19,6 +20,9 @@ def compute_md5(text: str) -> str:
     return hashlib.md5(text.encode('utf-8')).hexdigest()
 
 def scrape_url_text(url: str) -> str:
+    if not is_safe_url(url):
+        logger.warning(f"[Scheduler] Unsafe URL blocked: {url}")
+        return ""
     try:
         resp = requests.get(url, timeout=15)
         soup = BeautifulSoup(resp.content, "html.parser")
@@ -162,52 +166,54 @@ def run_inspection():
         release_db_connection(conn)
         return
 
-    # [PERF-3] 並行爬取所有網址，透過線程池同時發請求
-    # 50 筆 × 串行3s = 150s  vs  50 筆 × 並行(5線程) = ~30s
-    logger.info(f"[Scheduler] Scraping {len(rows)} URLs concurrently (max 5 workers)...")
-    
-    def scrape_row(row):
-        scholarship_code, title, url, old_hash = row
-        latest_text = scrape_url_text(url)
-        return row, latest_text
-
-    scraped_results = []
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        futures = {executor.submit(scrape_row, row): row for row in rows}
-        for future in as_completed(futures):
-            try:
-                row, latest_text = future.result()
-                scraped_results.append((row, latest_text))
-            except Exception as e:
-                logger.warning(f"[Scheduler] Scrape error for {futures[future][2]}: {e}")
-
-    # 爬取完成後，依序處理有變化的項目
-    changed_count = 0
-    for row, latest_text in scraped_results:
-        scholarship_code, title, url, old_hash = row
-        if not latest_text:
-            continue
-            
-        new_hash = compute_md5(latest_text)
+    try:
+        # [PERF-3] 並行爬取所有網址，透過線程池同時發請求
+        # 50 筆 × 串行3s = 150s  vs  50 筆 × 並行(5線程) = ~30s
+        logger.info(f"[Scheduler] Scraping {len(rows)} URLs concurrently (max 5 workers)...")
         
-        if old_hash != new_hash:
-            print(f"[Scheduler] Content change detected for {title} ({url})")
-            changed_count += 1
-            process_scholarship_update(row, new_hash, latest_text)
-        else:
-            try:
-                update_conn = get_db_connection()
-                c2 = update_conn.cursor()
-                now = datetime.now(timezone.utc)
-                c2.execute("UPDATE scholarships SET last_checked_at = %s WHERE scholarship_code = %s", (now.isoformat(), scholarship_code))
-                update_conn.commit()
-                c2.close()
-                release_db_connection(update_conn)
-            except Exception as e:
-                logger.warning(f"Failed to update last_checked for {title}: {e}")
-    
-    release_db_connection(conn)
-    logger.info(f"[Scheduler] Inspection complete. {changed_count}/{len(scraped_results)} changed.")
+        def scrape_row(row):
+            scholarship_code, title, url, old_hash = row
+            latest_text = scrape_url_text(url)
+            return row, latest_text
+
+        scraped_results = []
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = {executor.submit(scrape_row, row): row for row in rows}
+            for future in as_completed(futures):
+                try:
+                    row, latest_text = future.result()
+                    scraped_results.append((row, latest_text))
+                except Exception as e:
+                    logger.warning(f"[Scheduler] Scrape error for {futures[future][2]}: {e}")
+
+        # 爬取完成後，依序處理有變化的項目
+        changed_count = 0
+        for row, latest_text in scraped_results:
+            scholarship_code, title, url, old_hash = row
+            if not latest_text:
+                continue
+                
+            new_hash = compute_md5(latest_text)
+            
+            if old_hash != new_hash:
+                print(f"[Scheduler] Content change detected for {title} ({url})")
+                changed_count += 1
+                process_scholarship_update(row, new_hash, latest_text)
+            else:
+                try:
+                    update_conn = get_db_connection()
+                    c2 = update_conn.cursor()
+                    now = datetime.now(timezone.utc)
+                    c2.execute("UPDATE scholarships SET last_checked_at = %s WHERE scholarship_code = %s", (now.isoformat(), scholarship_code))
+                    update_conn.commit()
+                    c2.close()
+                    release_db_connection(update_conn)
+                except Exception as e:
+                    logger.warning(f"Failed to update last_checked for {title}: {e}")
+        
+        logger.info(f"[Scheduler] Inspection complete. {changed_count}/{len(scraped_results)} changed.")
+    finally:
+        release_db_connection(conn)
 
 
 def start_scheduler():

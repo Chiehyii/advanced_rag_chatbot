@@ -19,7 +19,7 @@ import config
 import hashlib
 from datetime import datetime, timedelta, timezone
 import jwt
-from passlib.context import CryptContext
+from utils import is_safe_url
 
 router = APIRouter(prefix="/api", tags=["admin"])
 openai_client = OpenAI(api_key=config.OPENAI_API_KEY)
@@ -47,7 +47,7 @@ class ScholarshipForm(BaseModel):
     markdown_content: str
 
 # --- Security Setup ---
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+import bcrypt
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/login")
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
@@ -223,11 +223,40 @@ def init_milvus_collection():
 @router.post("/login")
 @limiter.limit("5/minute")  # [SEC-4] 防止暴力破解，每個 IP 每分鐘最多嘗試 5 次
 async def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
-    if form_data.username != config.ADMIN_USERNAME or form_data.password != config.ADMIN_PASSWORD:
+    if form_data.username != config.ADMIN_USERNAME:
         raise HTTPException(
             status_code=401,
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
+        )
+        
+    # [SEC-1] 優先使用 Hash 比對，若未設定則退回使用明文比對
+    if config.ADMIN_PASSWORD_HASH:
+        # Bcrypt has a 72-byte limit. Truncate identical to generate_hash.py
+        password_to_check = form_data.password[:72].encode('utf-8')
+        try:
+            is_valid = bcrypt.checkpw(password_to_check, config.ADMIN_PASSWORD_HASH.encode('utf-8'))
+        except ValueError:
+            is_valid = False
+
+        if not is_valid:
+            raise HTTPException(
+                status_code=401,
+                detail="Incorrect username or password",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+    elif config.ADMIN_PASSWORD:
+        if form_data.password != config.ADMIN_PASSWORD:
+            raise HTTPException(
+                status_code=401,
+                detail="Incorrect username or password",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        print("WARNING: Using plaintext ADMIN_PASSWORD. Please generate a hash and use ADMIN_PASSWORD_HASH in .env instead.")
+    else:
+        raise HTTPException(
+            status_code=500,
+            detail="Server configuration error regarding admin credentials."
         )
     access_token_expires = timedelta(minutes=config.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
@@ -333,6 +362,8 @@ def extract_scholarship_info(request: ExtractRequest, current_admin: str = Depen
     content_to_process = ""
     
     if request.url:
+        if not is_safe_url(request.url):
+            raise HTTPException(status_code=400, detail="The provided URL is not safe to scrape (disallowed IP/domain).")
         try:
             resp = requests.get(request.url, timeout=10)
             soup = BeautifulSoup(resp.content, "html.parser")
@@ -535,4 +566,4 @@ def delete_scholarship(scholarship_code: str, current_admin: str = Depends(verif
             release_db_connection(conn)
 
 
-
+ 
