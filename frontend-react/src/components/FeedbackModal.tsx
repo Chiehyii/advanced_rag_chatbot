@@ -36,8 +36,8 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({ isOpen, onClose, o
             onChange={(e) => setText(e.target.value)}
           />
           <div style={{ textAlign: 'right' }}>
-            <button type="button" id="close-feedback-btn" onClick={onClose}>{t.cancel_button}</button>
-            <button type="submit">{t.submit_button}</button>
+            <button type="button" id="feedback-text-btn" onClick={onClose}>{t.cancel_button}</button>
+            <button type="submit" id="feedback-text-btn">{t.submit_button}</button>
           </div>
         </form>
       </div>

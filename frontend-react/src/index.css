@@ -716,8 +716,9 @@ body {
   box-sizing: border-box;
 }
 
-#feedback-modal h3 {
-  margin-top: 0;
+#feedback-modal h3,
+#feedback-modal p {
+  margin: 10px;
 }
 
 #feedback-backdrop {
@@ -735,7 +736,7 @@ body {
 #feedback-textarea {
   width: 95%;
   height: 100px;
-  margin-bottom: 10px;
+  margin: 10px;
   padding: 10px;
   border: 1px solid var(--border-color);
   border-radius: 4px;
@@ -743,6 +744,22 @@ body {
   background-color: var(--input-bg);
   color: var(--text-color);
   font-family: var(--font-family);
+}
+
+#feedback-text-btn {
+  background-color: var(--card-bg);
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 8px 16px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: background-color 0.2s ease, color 0.2s ease;
+  margin: 5px 10px 5px 0;
+}
+
+#feedback-text-btn:hover {
+  background-color: var(--card-hover-bg);
 }
 
 .chips-container {
@@ -840,7 +857,7 @@ a.inline-citation {
 
 a.inline-citation sup {
   background-color: rgba(26, 115, 232, 0.1);
-  padding: 0.2em 0.3em 0.3em 0.3em;
+  padding: 0.1em 0.3em 0.3em 0.3em;
   border-radius: 4px;
   font-size: 0.7em;
   font-weight: 700;
