@@ -667,12 +667,14 @@ body {
   font-size: 0.85rem;
   color: var(--text-muted);
   cursor: pointer;
-  transition: background-color 0.2s;
+  transition: background-color 0.2s, transform 0.2s, box-shadow 0.2s;
 }
 
 .example-question:hover {
   background-color: var(--card-hover-bg);
   color: var(--text-color);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
 }
 
 .feedback-buttons {
@@ -760,13 +762,15 @@ body {
   font-family: var(--font-family);
   cursor: pointer;
   text-align: left;
-  transition: background-color 0.2s ease;
+  transition: background-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
   letter-spacing: 0.02em;
 }
 
 .chip:hover {
   background-color: var(--card-hover-bg);
   color: var(--text-color);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
 }
 
 .chip:active {
