@@ -430,8 +430,21 @@ async def stream_chat_pipeline(question: str, history: list | None = None, lang:
     stream_completed = False  # [BUG-4] 旗標：只有完整串流後才寫入 DB
 
     try:
-        if history is not None and len(history) > 0:
+        # if history is not None and len(history) > 0: # len(history) > 0 還是執行rephrased question, 因為可能包含了那句開場白
+        #     rephrased_question = await _rephrase_question_with_history(history, question, lang=lang)
+
+        # 檢查歷史紀錄中，是否有來自使用者的「歷史」發言
+        # 因為前端在傳送時，會把「當下剛發出的問題」也 push 回 history 陣列裡
+        # 所以如果是第一句話，history 裡 user 的發言數量會剛好是 1
+        user_msg_count = sum(1 for msg in (history or []) if msg.get('role') == 'user')
+        
+        if user_msg_count > 1:
             rephrased_question = await _rephrase_question_with_history(history, question, lang=lang)
+        else:
+            # 如果只有 1 筆使用者發言（即當下這句），或是 0 筆，代表這是真正的第一句話
+            rephrased_question = question
+            # 📝 INFO：記錄沒有重新改寫問題
+            logger.info("[Rephrase] Skipped rephrasing because this is the first user query.")
         
         # 📝 INFO：記錄最終問題
         logger.info(f"[Question] Final question: {rephrased_question} (Original: {original_question})")
