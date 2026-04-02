@@ -65,7 +65,7 @@ export function ExtractionSection({ onExtracted, onUnauthorized, onToast, urlRef
                     </>
                 ) : (
                     <>
-                        <span className="btn-icon">✨</span>
+                        {/* <span className="btn-icon">✨</span> */}
                         <span className="btn-text">讓 AI 預先處理</span>
                         <div className="shimmer" />
                     </>

@@ -190,20 +190,23 @@ export function ScholarshipForm({ initialData, mode, onSaved, onDeleted, onUnaut
                 <div className="action-bar">
                     {mode === 'UPDATE' && (
                         <>
-                            <button type="button" className="submit-btn btn-danger" id="btn-delete"
-                                onClick={handleDelete} disabled={deleting}>
-                                {deleting ? '刪除中...' : '刪除此筆資料'}
-                            </button>
                             <button type="button" className="submit-btn btn-secondary" id="btn-clear"
                                 onClick={onDeleted}>
-                                清空並新增
+                                新增
                             </button>
+
                         </>
                     )}
                     <button type="button" className="submit-btn" id="btn-save"
                         onClick={handleSave} disabled={saving}>
-                        {saving ? '處理中，正在進行向量切片與同步...' : mode === 'UPDATE' ? '更新資料庫與知識庫' : '確認無誤，存入關聯資料庫與知識庫'}
+                        {saving ? '處理中，正在進行向量切片與同步...' : mode === 'UPDATE' ? '更新' : '確認無誤，存入資料庫'}
                     </button>
+                    {mode === 'UPDATE' && (
+                        <button type="button" className="submit-btn btn-danger" id="btn-delete"
+                            onClick={handleDelete} disabled={deleting}>
+                            {deleting ? '刪除中...' : '刪除'}
+                        </button>
+                    )}
                 </div>
             </form>
         </section>
