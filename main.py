@@ -88,6 +88,17 @@ async def chat_endpoint(request: Request, chat_request: ChatRequest):
             
             # 📝 INFO：記錄使用者的提問與語言
             logger.info(f"[Chat] Processing query for stream: '{chat_request.query}' in language '{chat_request.lang}'")
+            
+            # --- 壓力測試防護：如果是 MOCK_TEST，直接回傳模擬資料，不進 OpenAI Pipeline ---
+            if chat_request.query == "MOCK_TEST":
+                await asyncio.sleep(0.1) # 模擬一點點延遲
+                yield f"data: {json.dumps({'type': 'content', 'data': '這是'})}\n\n"
+                await asyncio.sleep(0.1)
+                yield f"data: {json.dumps({'type': 'content', 'data': '壓力測試模擬回應。'})}\n\n"
+                yield f"event: end_stream\ndata: {json.dumps({'type': 'final_data', 'data': {'contexts': [], 'log_id': -1}})}\n\n"
+                return
+            # ---------------------------------------------------------------------------------
+
             # The pipeline now yields events (content chunks or final data)
             async for event in stream_chat_pipeline(chat_request.query, chat_request.history or [], chat_request.lang):
                 event_type = event.get("type")
