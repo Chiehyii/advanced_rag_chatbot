@@ -382,24 +382,22 @@ async def generate_answer_stream(question: str, cleaned_contexts: list, lang: st
 class SuggestedReplies(BaseModel):
     replies: list[str]
 
-async def generate_suggested_replies(question: str, answer: str, lang: str = 'zh') -> list[str]:
+async def generate_suggested_replies(question: str, context_text: str, lang: str = 'zh') -> list[str]:
     system_prompt = (
         "You are a helpful assistant predicting the user's next questions. Rules:\n"
-        "1. Generate exactly 3 short follow-up questions (under 15 words each).\n"
-        "2. If the answer mentions specific scholarships, the questions MUST target those specific scholarships by name (e.g., 'What is the exact deadline for Scholarship X?').\n"
+        "1. Generate exactly 3 short follow-up questions (under 15 words each) based on the provided reference context.\n"
+        "2. If the context mentions specific scholarships, the questions MUST target those specific scholarships by name (e.g., 'What is the exact deadline for Scholarship X?').\n"
         "3. DO NOT generate broad or generic questions.\n"
-        "4. CRITICAL: DO NOT ask about any information that was already provided in the answer.\n"
-        "5. CRITICAL: DO NOT ask questions that the bot cannot answer, such as asking for someone's personal email, direct phone number, or physical office address."
+        "4. CRITICAL: DO NOT ask questions that the bot cannot answer, such as asking for someone's personal email, direct phone number, or physical office address."
     )
     if lang == 'zh':
         system_prompt = (
-            "你是一個預測使用者意圖的貼心助教。請根據使用者的問題以及你的完整回答，產生 3 個使用者接下來最可能追問的「短問題」。\n"
+            "你是一個預測使用者意圖的貼心助教。請根據使用者的問題以及檢索到的「參考資料(Context)」，產生 3 個使用者接下來最可能追問的「短問題」。\n"
             "【嚴格規則】\n"
             "1. 每個問題必須極度簡短且口語（15字以內）。\n"
-            "2. 如果你的回答中提到了多項獎學金，請**挑其中一個最有代表性的獎學金**名稱來發問（例如：「ＯＯ獎學金的申請表在哪裡下載？」），絕對不要問籠統廣泛的問題（例如：「有哪些推薦的獎學金？」）。\n"
-            "3. **絕對不可以**問回答中「已經提供過的資訊」。\n"
-            "4. **絕對不可以**問「機器人無法回答的問題」，例如：承辦人的信箱是什麼？全球處的地址在哪裡？聯絡電話是幾號？（因為隱私關係，知識庫通常缺乏這些聯絡細節）。\n"
-            "5. 建議詢問：該獎學金的應備文件、申請資格細節、或是截止日期（如果回答中尚未提及）。"
+            "2. 如果參考資料中提到了多項獎學金，請**挑其中一個最有代表性的獎學金**名稱來發問（例如：「ＯＯ獎學金的申請表在哪裡下載？」），絕對不要問籠統廣泛的問題（例如：「有哪些推薦的獎學金？」）。\n"
+            "3. **絕對不可以**問「機器人無法回答的問題」，例如：承辦人的信箱是什麼？全球處的地址在哪裡？聯絡電話是幾號？（因為隱私關係，知識庫通常缺乏這些聯絡細節）。\n"
+            "4. 建議詢問：該獎學金的應備文件、申請資格細節、或是截止日期。"
         )
     
     try:
@@ -407,7 +405,7 @@ async def generate_suggested_replies(question: str, answer: str, lang: str = 'zh
             model=config.OPENAI_MODEL_NAME,  # [OPT-2] 使用 config 而非硬編碼 "gpt-4o-mini"
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"User: {question}\n\nAssistant: {answer}"}
+                {"role": "user", "content": f"User's incoming question: {question}\n\nReference Context:\n{context_text}"}
             ],
             response_format=SuggestedReplies,
             temperature=0.7,
@@ -463,6 +461,12 @@ async def stream_chat_pipeline(question: str, history: list | None = None, lang:
         if cleaned_contexts:
             logger.info(f"[RAG] RAG path: {len(cleaned_contexts)} relevant documents found.")
 
+            # [優化] 提早發出請求：利用抓取到的 Context 同步預測接下來的按鈕，達到零延遲
+            context_text_for_chips = "\\n".join([c.get('text', '') for c in cleaned_contexts][:3]) # 前 3 篇文檔夠推測了
+            chips_task = asyncio.create_task(
+                generate_suggested_replies(rephrased_question, context_text_for_chips, lang=lang)
+            )
+
             llm_stream = generate_answer_stream(rephrased_question, cleaned_contexts, lang=lang, usage_data=usage_data)
             
             # 🌟 優化點 2：移除複雜的 Buffer 截斷邏輯，直接無腦 Yield
@@ -483,8 +487,8 @@ async def stream_chat_pipeline(question: str, history: list | None = None, lang:
             contexts_for_logging = unique_display_contexts # 用於寫入資料庫
             result_data = {"contexts": unique_display_contexts}
             
-            # Predict next questions
-            chips = await generate_suggested_replies(rephrased_question, full_answer, lang=lang)
+            # Predict next questions - await it now, which should return instantly if LLM stream took over 2s!
+            chips = await chips_task
             result_data["chips"] = chips
         
         else:

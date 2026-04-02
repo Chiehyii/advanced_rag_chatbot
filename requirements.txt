@@ -30,6 +30,7 @@ ckip-transformers
 pydantic
 python-dotenv
 requests
+aiohttp
 numpy
 pandas
 beautifulsoup4

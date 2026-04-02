@@ -3,12 +3,13 @@ import uuid
 import hashlib
 import requests
 import json
+import asyncio
+import aiohttp
 from bs4 import BeautifulSoup
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from datetime import datetime, timezone
-from concurrent.futures import ThreadPoolExecutor, as_completed  # [PERF-3] 並行爬取
-
+from concurrent.futures import ThreadPoolExecutor, as_completed  # 雖然不再用於 scraping，保留備用
 import config
 from admin_api import get_db_connection, release_db_connection, openai_client, init_milvus_collection, emb_texts_batch  # [CODE-2]
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -19,17 +20,43 @@ logger = get_logger(__name__)
 def compute_md5(text: str) -> str:
     return hashlib.md5(text.encode('utf-8')).hexdigest()
 
-def scrape_url_text(url: str) -> str:
+async def _fetch_url_text(session: aiohttp.ClientSession, url: str) -> str:
     if not is_safe_url(url):
         logger.warning(f"[Scheduler] Unsafe URL blocked: {url}")
         return ""
     try:
-        resp = requests.get(url, timeout=15)
-        soup = BeautifulSoup(resp.content, "html.parser")
-        return soup.get_text(separator="\n", strip=True)
+        async with session.get(url, timeout=15) as resp:
+            content = await resp.read()
+            soup = BeautifulSoup(content, "html.parser")
+            return soup.get_text(separator="\n", strip=True)
     except Exception as e:
-        logger.warning(f"[Scheduler] Failed to scrape {url}: {e}")
+        logger.warning(f"[Scheduler] Failed to scrape {url}: {type(e).__name__} - {e}")
         return ""
+
+async def _async_run_inspection(rows):
+    scraped_results = []
+    
+    # 限制最大並發數為 10
+    sem = asyncio.Semaphore(10)
+    
+    async def fetch_row(session, row):
+        scholarship_code, title, url, old_hash = row
+        async with sem:
+            latest_text = await _fetch_url_text(session, url)
+        return row, latest_text
+    
+    async with aiohttp.ClientSession() as session:
+        tasks = [fetch_row(session, row) for row in rows]
+        # 並發執行，某個失敗不會中斷全域
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+    for res in results:
+        if isinstance(res, Exception):
+            logger.warning(f"[Scheduler] Scrape error during gather: {res}")
+        else:
+            scraped_results.append(res)
+            
+    return scraped_results
 
 def ask_ai_to_extract(url: str, content: str) -> dict:
     system_prompt = """
@@ -167,24 +194,12 @@ def run_inspection():
         return
 
     try:
-        # [PERF-3] 並行爬取所有網址，透過線程池同時發請求
-        # 50 筆 × 串行3s = 150s  vs  50 筆 × 並行(5線程) = ~30s
-        logger.info(f"[Scheduler] Scraping {len(rows)} URLs concurrently (max 5 workers)...")
+        # [PERF-3] 並行爬取所有網址，全面升級為徹底非阻塞的 aiohttp
+        # 相比於 ThreadPool，效能跳躍性提升、佔用資源極少。
+        logger.info(f"[Scheduler] Scraping {len(rows)} URLs concurrently using aiohttp...")
         
-        def scrape_row(row):
-            scholarship_code, title, url, old_hash = row
-            latest_text = scrape_url_text(url)
-            return row, latest_text
-
-        scraped_results = []
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            futures = {executor.submit(scrape_row, row): row for row in rows}
-            for future in as_completed(futures):
-                try:
-                    row, latest_text = future.result()
-                    scraped_results.append((row, latest_text))
-                except Exception as e:
-                    logger.warning(f"[Scheduler] Scrape error for {futures[future][2]}: {e}")
+        # 使用 asyncio.run 啟動異步驅動
+        scraped_results = asyncio.run(_async_run_inspection(rows))
 
         # 爬取完成後，依序處理有變化的項目
         changed_count = 0
