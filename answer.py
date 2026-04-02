@@ -64,7 +64,7 @@ async def get_embedding(text):
     )
     return resp.data[0].embedding
 
-async def retrieve_context(question: str, expr: str, lang: str = 'zh', top_k: int = 15):
+async def retrieve_context(question: str, expr: str, lang: str = 'zh', top_k: int = 10):
     """根據問題進行混合檢索 (Dense + Sparse) + 過濾"""
     from pymilvus import AnnSearchRequest, RRFRanker
 
@@ -430,7 +430,7 @@ async def stream_chat_pipeline(question: str, history: list | None = None, lang:
     stream_completed = False  # [BUG-4] 旗標：只有完整串流後才寫入 DB
 
     try:
-        if history:
+        if history is not None and len(history) > 0:
             rephrased_question = await _rephrase_question_with_history(history, question, lang=lang)
         
         # 📝 INFO：記錄最終問題
