@@ -4,6 +4,7 @@ import { ExtractionSection } from './ExtractionSection';
 import { ScholarshipForm } from './ScholarshipForm';
 import { Scholarship, AdminMode } from './types';
 import './admin.css';
+
 interface AdminLayoutProps {
     onLogout: () => void;
 }
@@ -12,51 +13,67 @@ interface ToastState {
     type: 'success' | 'error';
     visible: boolean;
 }
+
+type ViewMode = 'dashboard' | 'detail';
+
 export function AdminLayout({ onLogout }: AdminLayoutProps) {
+    const [view, setView] = useState<ViewMode>('dashboard');
     const [selectedScholarship, setSelectedScholarship] = useState<Scholarship | null>(null);
     const [mode, setMode] = useState<AdminMode>('CREATE');
-    const [showForm, setShowForm] = useState(false);
     const [toast, setToast] = useState<ToastState>({ message: '', type: 'success', visible: false });
     const [refreshTrigger, setRefreshTrigger] = useState(0);
     const extractedUrlRef = useRef<string>('');
+
     const showToast = (message: string, type: 'success' | 'error') => {
         setToast({ message, type, visible: true });
         setTimeout(() => setToast(t => ({ ...t, visible: false })), 3000);
     };
+
     const handleUnauthorized = useCallback(() => {
         localStorage.removeItem('admin_jwt');
         onLogout();
         showToast('驗證過期，請重新登入', 'error');
     }, [onLogout]);
+
+    // 點擊側欄某筆獎學金 → 進入 detail 頁
     const handleSelectScholarship = (s: Scholarship) => {
         setSelectedScholarship(s);
         setMode('UPDATE');
-        setShowForm(true);
-        setTimeout(() => {
-            document.getElementById('result-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }, 100);
+        setView('detail');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
     };
+
+    // 來源萃取完成 → 進入 detail 頁（新增模式）
     const handleExtracted = (data: Scholarship) => {
         setSelectedScholarship(data);
         setMode('CREATE');
-        setShowForm(true);
-        setTimeout(() => {
-            document.getElementById('result-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }, 100);
+        setView('detail');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
     };
+
+    // 儲存/刪除完成 → 返回 dashboard
     const handleSaved = () => {
         setRefreshTrigger(n => n + 1);
-        setShowForm(false);
         setSelectedScholarship(null);
+        setView('dashboard');
         window.scrollTo({ top: 0, behavior: 'smooth' });
     };
+
     const handleDeleted = () => {
         setRefreshTrigger(n => n + 1);
-        setShowForm(false);
         setSelectedScholarship(null);
         setMode('CREATE');
+        setView('dashboard');
         window.scrollTo({ top: 0, behavior: 'smooth' });
     };
+
+    // 返回 dashboard 按鈕
+    const handleBack = () => {
+        setSelectedScholarship(null);
+        setView('dashboard');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    };
+
     return (
         <div className="app-container">
             <AdminSidebar
@@ -66,7 +83,18 @@ export function AdminLayout({ onLogout }: AdminLayoutProps) {
             />
             <main className="main-stage">
                 <header className="top-bar glass-panel">
-                    <h1>獎學金建檔</h1>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        {view === 'detail' && (
+                            <button
+                                onClick={handleBack}
+                                className="back-btn"
+                                id="btn-back"
+                            >
+                                ← 返回總覽
+                            </button>
+                        )}
+                        <h1>{view === 'dashboard' ? '資料庫建檔' : '資料庫編輯'}</h1>
+                    </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
                         <div className="status-indicator" id="status-indicator">
                             <span className="dot green" />
@@ -82,14 +110,18 @@ export function AdminLayout({ onLogout }: AdminLayoutProps) {
                         </button>
                     </div>
                 </header>
+
                 <div className="content-wrapper">
-                    <ExtractionSection
-                        onExtracted={handleExtracted}
-                        onUnauthorized={handleUnauthorized}
-                        onToast={showToast}
-                        urlRef={extractedUrlRef}
-                    />
-                    {showForm && selectedScholarship && (
+                    {view === 'dashboard' && (
+                        <ExtractionSection
+                            onExtracted={handleExtracted}
+                            onUnauthorized={handleUnauthorized}
+                            onToast={showToast}
+                            urlRef={extractedUrlRef}
+                        />
+                    )}
+
+                    {view === 'detail' && selectedScholarship && (
                         <ScholarshipForm
                             initialData={selectedScholarship}
                             mode={mode}
@@ -101,6 +133,7 @@ export function AdminLayout({ onLogout }: AdminLayoutProps) {
                     )}
                 </div>
             </main>
+
             {/* Toast */}
             <div id="toast" className={`toast ${toast.visible ? 'show' : ''} ${toast.type}`}>
                 {toast.message}

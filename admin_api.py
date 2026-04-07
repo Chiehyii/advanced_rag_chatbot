@@ -293,7 +293,7 @@ def list_scholarships(current_admin: str = Depends(verify_admin)):
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT scholarship_code, title, link, category, created_at, education_system, tags, identity FROM scholarships ORDER BY created_at DESC;")
+        cursor.execute("SELECT scholarship_code, title, link, category, created_at, education_system, tags, identity, needs_review FROM scholarships ORDER BY created_at DESC;")
         rows = cursor.fetchall()
         
         result = []
@@ -307,6 +307,7 @@ def list_scholarships(current_admin: str = Depends(verify_admin)):
                 "education_system": _parse_json_array(row[5]),
                 "tags": _parse_json_array(row[6]),
                 "identity": _parse_json_array(row[7]),
+                "needs_review": bool(row[8]) if row[8] is not None else False,
             })
         return {"status": "success", "data": result}
     except Exception as e:
@@ -323,7 +324,7 @@ def get_scholarship(scholarship_code: str, current_admin: str = Depends(verify_a
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT scholarship_code, title, link, category, education_system, tags, identity, amount_summary, description, application_date_text, contact, markdown_content FROM scholarships WHERE scholarship_code = %s;", (scholarship_code,))
+        cursor.execute("SELECT scholarship_code, title, link, category, education_system, tags, identity, amount_summary, description, application_date_text, contact, markdown_content, needs_review, pending_data FROM scholarships WHERE scholarship_code = %s;", (scholarship_code,))
         row = cursor.fetchone()
         
         if not row:
@@ -341,11 +342,34 @@ def get_scholarship(scholarship_code: str, current_admin: str = Depends(verify_a
             "description": row[8],
             "application_date_text": row[9],
             "contact": row[10],
-            "markdown_content": row[11]
+            "markdown_content": row[11],
+            "needs_review": bool(row[12]) if row[12] is not None else False,
+            "pending_data": row[13] if row[13] is not None else None,
         }
         return {"status": "success", "data": data}
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if 'cursor' in locals() and cursor:
+            cursor.close()
+        if 'conn' in locals() and conn:
+            release_db_connection(conn)
+
+@router.patch("/scholarships/{scholarship_code}/discard_pending")
+def discard_pending(scholarship_code: str, current_admin: str = Depends(verify_admin)):
+    """管理員捨棄 Scheduler 暫存的草稿，清除 pending_data 並取消待處理標記。"""
+    scholarship_code = validate_scholarship_code(scholarship_code)  # [SEC-2]
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE scholarships SET needs_review = FALSE, pending_data = NULL WHERE scholarship_code = %s",
+            (scholarship_code,)
+        )
+        conn.commit()
+        return {"status": "success", "message": "Pending changes discarded"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
@@ -481,7 +505,7 @@ def save_scholarship(form: ScholarshipForm, current_admin: str = Depends(verify_
 def update_scholarship(scholarship_code: str, form: ScholarshipForm, current_admin: str = Depends(verify_admin)):
     scholarship_code = validate_scholarship_code(scholarship_code)  # [SEC-2]
 
-    # 1. Update PostgreSQL
+    # 1. Update PostgreSQL (also clear pending review state)
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -490,7 +514,8 @@ def update_scholarship(scholarship_code: str, form: ScholarshipForm, current_adm
         UPDATE scholarships SET
             title = %s, link = %s, category = %s, education_system = %s, tags = %s, identity = %s,
             amount_summary = %s, description = %s, application_date_text = %s, contact = %s,
-            markdown_content = %s, content_hash = %s, last_checked_at = %s
+            markdown_content = %s, content_hash = %s, last_checked_at = %s,
+            needs_review = FALSE, pending_data = NULL
         WHERE scholarship_code = %s;
         """
         cursor.execute(update_query, (

@@ -785,3 +785,103 @@ textarea {
 [class*="-container"] [class*="-multiValue"] div {
     color: white !important;
 }
+
+/* ── 待處理 Badge ── */
+.pending-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: 20px;
+    background: #f59e0b;
+    color: #fff;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    white-space: nowrap;
+    flex-shrink: 0;
+    animation: pulse-amber 2s infinite;
+}
+
+@keyframes pulse-amber {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.5); }
+    50%       { box-shadow: 0 0 0 5px rgba(245, 158, 11, 0); }
+}
+
+/* 待處理清單項目左邊框 */
+.scholarship-list li.needs-review {
+    border-left: 3px solid #f59e0b;
+}
+
+/* ── 待處理 Banner（ScholarshipForm 頂部）── */
+.pending-review-banner {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    background: rgba(245, 158, 11, 0.08);
+    border: 1px solid rgba(245, 158, 11, 0.4);
+    border-radius: 12px;
+    padding: 18px 24px;
+    margin-bottom: 28px;
+}
+
+.pending-review-banner-content {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+}
+
+.pending-review-icon {
+    font-size: 1.4rem;
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+.pending-review-banner strong {
+    display: block;
+    color: #92400e;
+    font-size: 0.95rem;
+    margin-bottom: 4px;
+}
+
+.pending-review-banner p {
+    color: #b45309;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    margin: 0;
+}
+
+@media (prefers-color-scheme: dark) {
+    .pending-review-banner {
+        background: rgba(245, 158, 11, 0.1);
+        border-color: rgba(245, 158, 11, 0.3);
+    }
+    .pending-review-banner strong { color: #fcd34d; }
+    .pending-review-banner p { color: #fbbf24; }
+}
+
+/* ── 返回按鈕 ── */
+.back-btn {
+    background: none;
+    border: 1px solid var(--input-border);
+    border-radius: 8px;
+    padding: 6px 14px;
+    cursor: pointer;
+    font-size: 0.88rem;
+    color: var(--text-secondary);
+    font-family: inherit;
+    transition: all 0.2s ease;
+}
+
+.back-btn:hover {
+    background: var(--list-hover);
+    color: var(--text-primary);
+    border-color: var(--accent);
+}
+
+/* title 需要 nowrap 時只限於沒有 badge 的情況 */
+.scholarship-list li .title span:first-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}

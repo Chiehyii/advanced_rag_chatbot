@@ -99,17 +99,23 @@ def ask_ai_to_extract(url: str, content: str) -> dict:
         return {}
 
 def process_scholarship_update(row, new_hash, new_text):
+    """
+    [REVIEW MODE] 偵測到內容變更後，不再自動更新 DB 與 Milvus。
+    改為將 AI 萃取結果暫存至 pending_data，並設 needs_review=True，
+    等待管理員手動審核後才正式儲存。
+    """
     scholarship_code, title, url = row[0], row[1], row[2]
-    print(f"[Scheduler] AI re-extracting {title} from {url}")
+    logger.info(f"[Scheduler] Content changed for '{title}', running AI extraction for pending review...")
     
     extracted_data = ask_ai_to_extract(url, new_text)
     if not extracted_data:
+        logger.warning(f"[Scheduler] AI extraction returned empty for {title}, skipping.")
         return
 
     extracted_data['link'] = url
+    extracted_data['scholarship_code'] = scholarship_code
 
-    # [FIX] 防呆機制：AI 有時會回傳 dict 而不是 string 導致 psycopg2 錯誤 (can't adapt type 'dict')
-    # 確保這些欄位儲存進資料庫前都是 string 格式
+    # 防呆：確保字串欄位不為 dict/list
     for field in ['title', 'category', 'amount_summary', 'description', 'application_date_text', 'contact', 'markdown_content']:
         val = extracted_data.get(field, "")
         if isinstance(val, (dict, list)):
@@ -117,91 +123,37 @@ def process_scholarship_update(row, new_hash, new_text):
         else:
             extracted_data[field] = str(val) if val is not None else ""
 
-    # 1. Update DB
+    # 只寫入 pending_data 和 needs_review，不動主欄位和 Milvus
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
-        update_query = """
-        UPDATE scholarships SET
-            title = %s, category = %s, education_system = %s, tags = %s, identity = %s,
-            amount_summary = %s, description = %s, application_date_text = %s, contact = %s, 
-            markdown_content = %s, content_hash = %s, last_checked_at = %s
-        WHERE scholarship_code = %s;
-        """
         now = datetime.now(timezone.utc)
-        cursor.execute(update_query, (
-            extracted_data.get('title', title),
-            extracted_data.get('category', ''),
-            json.dumps(extracted_data.get('education_system', []), ensure_ascii=False),
-            json.dumps(extracted_data.get('tags', []), ensure_ascii=False),
-            json.dumps(extracted_data.get('identity', []), ensure_ascii=False),
-            extracted_data.get('amount_summary', ''),
-            extracted_data.get('description', ''),
-            extracted_data.get('application_date_text', ''),
-            extracted_data.get('contact', ''),
-            extracted_data.get('markdown_content', ''),
-            new_hash,
-            now.isoformat(),
-            scholarship_code
-        ))
+        cursor.execute(
+            """
+            UPDATE scholarships
+            SET pending_data = %s, needs_review = TRUE, last_checked_at = %s
+            WHERE scholarship_code = %s
+            """,
+            (json.dumps(extracted_data, ensure_ascii=False), now.isoformat(), scholarship_code)
+        )
         conn.commit()
-    except Exception as e:
-        print(f"[Scheduler] DB Update failed: {e}")
+        logger.info(f"[Scheduler] pending_data saved for '{title}', awaiting admin review.")
         try:
-            send_line_message(f"❌ [系統通知] 資料庫更新失敗\n名稱: {title}\n錯誤: {e}")
+            send_line_message(
+                f"🔔 [系統通知] 偵測到獎學金內容變更\n"
+                f"名稱: {title}\n網址: {url}\n"
+                f"AI 已完成萃取，請至後台審核並手動儲存。"
+            )
         except Exception:
             pass
-        return
+    except Exception as e:
+        logger.error(f"[Scheduler] Failed to save pending_data for {title}: {e}", exc_info=True)
+        try:
+            send_line_message(f"❌ [系統通知] 暫存草稿失敗\n名稱: {title}\n錯誤: {e}")
+        except Exception:
+            pass
     finally:
-        release_db_connection(conn)  # [SEC-3] 歸還連線池
-
-    # 2. Update Milvus
-    try:
-        milvus_client, collection_name = init_milvus_collection()
-        
-        # Delete old chunks
-        milvus_client.delete(collection_name=collection_name, filter=f"source_path == '{scholarship_code}'")
-        milvus_client.flush(collection_name=collection_name)
-        
-        # Insert new chunks
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-        chunks = [c.strip() for c in text_splitter.split_text(extracted_data.get('markdown_content', '')) if c.strip()]
-        
-        if chunks:
-            # [PERF-1] 批次嵌入
-            vectors = emb_texts_batch(chunks)
-            source_name = extracted_data.get('title') or title or "unknown_scholarship"
-            data_to_insert = []
-            for chunk, vector in zip(chunks, vectors):
-                data_to_insert.append({
-                    "id": uuid.uuid4().int >> 65,  # [CODE-2] UUID 確保唯一性
-                    "text": chunk,
-                    "source_file": source_name + ".md",
-                    "source_path": scholarship_code,
-                    "source_url": url,
-                    "identity": extracted_data.get('identity', []),
-                    "education_system": extracted_data.get('education_system', []),
-                    "category": [extracted_data.get('category', '')] if extracted_data.get('category', '') else [],
-                    "tags": extracted_data.get('tags', []),
-                    "vector": vector
-                })
-
-            milvus_client.insert(collection_name=collection_name, data=data_to_insert)
-            milvus_client.flush(collection_name=collection_name)
-            
-        logger.info(f"[Scheduler] Successfully updated Milvus chunks for {title}")
-        try:
-           
-            send_line_message(f"✅ [系統通知] 獎學金資訊已自動更新\n名稱: {title}\n網址: {url}\n系統已成功重新萃取內容並更新知識庫。")
-        except Exception:
-            pass
-    except Exception as e:
-        logger.error(f"[Scheduler] Milvus Update failed: {e}", exc_info=True)
-        try:
-            
-            send_line_message(f"❌ [系統通知] 向量庫 (Milvus) 更新失敗\n名稱: {title}\n錯誤: {e}")
-        except Exception:
-            pass
+        release_db_connection(conn)
 
 
 def run_inspection():

@@ -104,9 +104,14 @@ export function AdminSidebar({ onSelect, onUnauthorized, refreshTrigger }: Admin
                         <li><div className="meta" style={{ textAlign: 'center', padding: '20px 0' }}>目前資料庫為空</div></li>
                     ) : filtered.map(item => (
                         <li key={item.scholarship_code}
-                            className={activeCode === item.scholarship_code ? 'active' : ''}
+                            className={`${activeCode === item.scholarship_code ? 'active' : ''} ${item.needs_review ? 'needs-review' : ''}`}
                             onClick={() => handleClick(item.scholarship_code)}>
-                            <div className="title">{item.title}</div>
+                            <div className="title" style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                <span>{item.title}</span>
+                                {item.needs_review && (
+                                    <span className="pending-badge">待處理</span>
+                                )}
+                            </div>
                             <div className="meta">{item.category || '未分類'} | {item.scholarship_code.substring(0, 8)}</div>
                         </li>
                     ))}

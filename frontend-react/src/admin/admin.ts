@@ -34,7 +34,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Action Buttons
     const btnSave = document.getElementById('btn-save') as HTMLButtonElement;
-    const btnUpdate = document.createElement('button'); // We will just swap text of btnSave, or we can use state
     const btnDelete = document.getElementById('btn-delete') as HTMLButtonElement;
     const btnClear = document.getElementById('btn-clear') as HTMLButtonElement;
 

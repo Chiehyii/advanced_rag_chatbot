@@ -71,6 +71,12 @@ export async function apiDeleteScholarship(code: string): Promise<void> {
     const result = await res.json();
     if (!res.ok) throw new Error(result.detail || 'Delete Error');
 }
+export async function apiDiscardPending(code: string): Promise<void> {
+    const res = await authFetch(`/api/scholarships/${code}/discard_pending`, { method: 'PATCH' });
+    if (res.status === 401) throw new Error('UNAUTHORIZED');
+    const result = await res.json();
+    if (!res.ok) throw new Error(result.detail || 'Discard Error');
+}
 export async function apiGetMetadataSchema() {
     const res = await fetch('/metadata_schema.json');
     return res.json();

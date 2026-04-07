@@ -2,8 +2,9 @@ import { useState, useEffect, useRef } from 'react';
 import Select from 'react-select';
 import { marked } from 'marked';
 import { Scholarship, AdminMode, MetadataSchema } from './types';
-import { apiSaveScholarship, apiUpdateScholarship, apiDeleteScholarship, apiGetMetadataSchema } from './api';
+import { apiSaveScholarship, apiUpdateScholarship, apiDeleteScholarship, apiDiscardPending, apiGetMetadataSchema } from './api';
 import './admin.css';
+
 interface ScholarshipFormProps {
     initialData: Scholarship | null;
     mode: AdminMode;
@@ -23,6 +24,7 @@ const selectStyles = {
     multiValueLabel: (base: any) => ({ ...base, color: '#fff' }),
     multiValueRemove: (base: any) => ({ ...base, color: '#fff', ':hover': { backgroundColor: '#4f46e5', color: '#fff' } }),
 };
+
 export function ScholarshipForm({ initialData, mode, onSaved, onDeleted, onUnauthorized, onToast }: ScholarshipFormProps) {
     const [schema, setSchema] = useState<MetadataSchema | null>(null);
     const [code, setCode] = useState('');
@@ -39,30 +41,40 @@ export function ScholarshipForm({ initialData, mode, onSaved, onDeleted, onUnaut
     const [markdown, setMarkdown] = useState('');
     const [saving, setSaving] = useState(false);
     const [deleting, setDeleting] = useState(false);
+    const [discarding, setDiscarding] = useState(false);
     const previewRef = useRef<HTMLDivElement>(null);
+
+    // 是否為「待處理」狀態（有 pending_data）
+    const needsReview = !!(initialData?.needs_review && initialData?.pending_data);
+
     useEffect(() => {
         apiGetMetadataSchema().then(setSchema).catch(console.error);
     }, []);
+
     useEffect(() => {
         if (!initialData) return;
-        setCode(initialData.scholarship_code || '');
-        setTitle(initialData.title || '');
-        setLink(initialData.link || '');
-        setCategory(initialData.category || '');
-        setEduSelected(toOptions(initialData.education_system));
-        setTagsSelected(toOptions(initialData.tags));
-        setIdentitySelected(toOptions(initialData.identity));
-        setDate(initialData.application_date_text || '');
-        setAmount(initialData.amount_summary || '');
-        setContact(initialData.contact || '');
-        setDescription(initialData.description || '');
-        setMarkdown(initialData.markdown_content || '');
+        // 若是待處理狀態，預填 pending_data（新版草稿）供管理員審核
+        const source = needsReview && initialData.pending_data ? initialData.pending_data : initialData;
+        setCode(initialData.scholarship_code || '');  // code 永遠用主記錄的
+        setTitle(source.title || '');
+        setLink(source.link || '');
+        setCategory(source.category || '');
+        setEduSelected(toOptions(source.education_system));
+        setTagsSelected(toOptions(source.tags));
+        setIdentitySelected(toOptions(source.identity));
+        setDate(source.application_date_text || '');
+        setAmount(source.amount_summary || '');
+        setContact(source.contact || '');
+        setDescription(source.description || '');
+        setMarkdown(source.markdown_content || '');
     }, [initialData]);
+
     useEffect(() => {
         if (previewRef.current) {
             previewRef.current.innerHTML = marked.parse(markdown) as string;
         }
     }, [markdown]);
+
     const buildPayload = (): Scholarship => ({
         scholarship_code: code,
         title,
@@ -77,6 +89,7 @@ export function ScholarshipForm({ initialData, mode, onSaved, onDeleted, onUnaut
         description,
         markdown_content: markdown,
     });
+
     const handleSave = async () => {
         if (!title.trim() || !code.trim()) {
             onToast('標題與代碼不可為空！', 'error');
@@ -99,6 +112,7 @@ export function ScholarshipForm({ initialData, mode, onSaved, onDeleted, onUnaut
             setSaving(false);
         }
     };
+
     const handleDelete = async () => {
         if (!code) return;
         if (!confirm('確定要從資料庫與知識庫中完全刪除這筆資料嗎？此操作無法還原。')) return;
@@ -114,11 +128,50 @@ export function ScholarshipForm({ initialData, mode, onSaved, onDeleted, onUnaut
             setDeleting(false);
         }
     };
+
+    const handleDiscard = async () => {
+        if (!code) return;
+        if (!confirm('確定要捨棄系統偵測到的變更草稿嗎？現有資料庫內容將保持不變。')) return;
+        setDiscarding(true);
+        try {
+            await apiDiscardPending(code);
+            onToast('✅ 已捨棄草稿，資料庫內容維持原狀。', 'success');
+            onSaved(); // 回到 dashboard 並刷新清單
+        } catch (err: any) {
+            if (err.message === 'UNAUTHORIZED') { onUnauthorized(); return; }
+            onToast('捨棄失敗：' + err.message, 'error');
+        } finally {
+            setDiscarding(false);
+        }
+    };
+
     return (
         <section className="form-section glass-panel slide-up delay-1" id="result-section">
+            {/* 待處理 Banner */}
+            {needsReview && (
+                <div className="pending-review-banner">
+                    <div className="pending-review-banner-content">
+                        <span className="pending-review-icon">⚠️</span>
+                        <div>
+                            <strong>系統自動偵測到此獎學金來源內容有更新</strong>
+                            <p>以下為 AI 萃取的新版本草稿，請審核後選擇儲存或捨棄。現有知識庫內容尚未變動。</p>
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        className="submit-btn btn-secondary"
+                        id="btn-discard"
+                        onClick={handleDiscard}
+                        disabled={discarding}
+                    >
+                        {discarding ? '處理中...' : '捨棄變更'}
+                    </button>
+                </div>
+            )}
+
             <div className="section-title">
-                <h3>2. 審核 &amp; 修改</h3>
-                <p>AI 已填妥以下欄位，請確認無誤</p>
+                <h3>{mode === 'UPDATE' ? '審核 & 修改' : '2. 審核 & 修改'}</h3>
+                <p>{needsReview ? 'AI 已根據最新來源重新萃取，請確認以下內容' : 'AI 已填妥以下欄位，請確認無誤'}</p>
             </div>
             <form onSubmit={e => e.preventDefault()}>
                 <div className="form-grid">
@@ -174,7 +227,7 @@ export function ScholarshipForm({ initialData, mode, onSaved, onDeleted, onUnaut
                     <textarea id="f-desc" rows={3} value={description} onChange={e => setDescription(e.target.value)} />
                 </div>
                 <div className="section-title mt-2">
-                    <h3>3. 知識庫 Markdown 預覽</h3>
+                    <h3>知識庫 Markdown 預覽</h3>
                     <p>這將是被切片存入 Milvus 向量資料庫的內容</p>
                 </div>
                 <div className="markdown-editor-container">
@@ -188,15 +241,6 @@ export function ScholarshipForm({ initialData, mode, onSaved, onDeleted, onUnaut
                     <div id="markdown-preview" className="markdown-preview" ref={previewRef} />
                 </div>
                 <div className="action-bar">
-                    {mode === 'UPDATE' && (
-                        <>
-                            <button type="button" className="submit-btn btn-secondary" id="btn-clear"
-                                onClick={onDeleted}>
-                                新增
-                            </button>
-
-                        </>
-                    )}
                     <button type="button" className="submit-btn" id="btn-save"
                         onClick={handleSave} disabled={saving}>
                         {saving ? '處理中，正在進行向量切片與同步...' : mode === 'UPDATE' ? '更新' : '確認無誤，存入資料庫'}

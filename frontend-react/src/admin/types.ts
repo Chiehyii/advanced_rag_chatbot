@@ -12,6 +12,8 @@ export interface Scholarship {
     contact?: string;
     markdown_content?: string;
     created_at?: string;
+    needs_review?: boolean;
+    pending_data?: Scholarship | null;
 }
 export interface MetadataSchema {
     education_system: string[];
