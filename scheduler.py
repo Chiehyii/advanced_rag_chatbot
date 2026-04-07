@@ -15,6 +15,7 @@ from admin_api import get_db_connection, release_db_connection, openai_client, i
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from utils import is_safe_url
 from logger import get_logger
+from notifier import send_line_message
 logger = get_logger(__name__)
 
 def compute_md5(text: str) -> str:
@@ -31,6 +32,11 @@ async def _fetch_url_text(session: aiohttp.ClientSession, url: str) -> str:
             return soup.get_text(separator="\n", strip=True)
     except Exception as e:
         logger.warning(f"[Scheduler] Failed to scrape {url}: {type(e).__name__} - {e}")
+        try:
+            from notifier import send_line_message
+            send_line_message(f"⚠️ [系統通知] 爬蟲報錯\n網址: {url}\n錯誤: {type(e).__name__} - {e}")
+        except Exception:
+            pass
         return ""
 
 async def _async_run_inspection(rows):
@@ -45,7 +51,8 @@ async def _async_run_inspection(rows):
             latest_text = await _fetch_url_text(session, url)
         return row, latest_text
     
-    async with aiohttp.ClientSession() as session:
+    connector = aiohttp.TCPConnector(ssl=False)
+    async with aiohttp.ClientSession(connector=connector) as session:
         tasks = [fetch_row(session, row) for row in rows]
         # 並發執行，某個失敗不會中斷全域
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -101,6 +108,15 @@ def process_scholarship_update(row, new_hash, new_text):
 
     extracted_data['link'] = url
 
+    # [FIX] 防呆機制：AI 有時會回傳 dict 而不是 string 導致 psycopg2 錯誤 (can't adapt type 'dict')
+    # 確保這些欄位儲存進資料庫前都是 string 格式
+    for field in ['title', 'category', 'amount_summary', 'description', 'application_date_text', 'contact', 'markdown_content']:
+        val = extracted_data.get(field, "")
+        if isinstance(val, (dict, list)):
+            extracted_data[field] = json.dumps(val, ensure_ascii=False)
+        else:
+            extracted_data[field] = str(val) if val is not None else ""
+
     # 1. Update DB
     conn = get_db_connection()
     try:
@@ -131,6 +147,10 @@ def process_scholarship_update(row, new_hash, new_text):
         conn.commit()
     except Exception as e:
         print(f"[Scheduler] DB Update failed: {e}")
+        try:
+            send_line_message(f"❌ [系統通知] 資料庫更新失敗\n名稱: {title}\n錯誤: {e}")
+        except Exception:
+            pass
         return
     finally:
         release_db_connection(conn)  # [SEC-3] 歸還連線池
@@ -170,8 +190,18 @@ def process_scholarship_update(row, new_hash, new_text):
             milvus_client.flush(collection_name=collection_name)
             
         logger.info(f"[Scheduler] Successfully updated Milvus chunks for {title}")
+        try:
+           
+            send_line_message(f"✅ [系統通知] 獎學金資訊已自動更新\n名稱: {title}\n網址: {url}\n系統已成功重新萃取內容並更新知識庫。")
+        except Exception:
+            pass
     except Exception as e:
         logger.error(f"[Scheduler] Milvus Update failed: {e}", exc_info=True)
+        try:
+            
+            send_line_message(f"❌ [系統通知] 向量庫 (Milvus) 更新失敗\n名稱: {title}\n錯誤: {e}")
+        except Exception:
+            pass
 
 
 def run_inspection():
@@ -227,6 +257,19 @@ def run_inspection():
                     logger.warning(f"Failed to update last_checked for {title}: {e}")
         
         logger.info(f"[Scheduler] Inspection complete. {changed_count}/{len(scraped_results)} changed.")
+        
+        # [NEW] 不論有無變動，自檢完成後都發送一個總結通知
+        try:
+            summary_msg = (
+                f"📊 [系統自動檢測完成]\n"
+                f"檢查時間：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"本次檢查項目：{len(rows)} 筆\n"
+                f"偵測到變動：{changed_count} 筆\n"
+                f"狀態：自檢程序已順利執行完畢。"
+            )
+            send_line_message(summary_msg)
+        except Exception as e:
+            logger.warning(f"Failed to send summary notification: {e}")
     finally:
         release_db_connection(conn)
 
@@ -237,3 +280,8 @@ def start_scheduler():
     scheduler.add_job(run_inspection, IntervalTrigger(minutes=720), id='scholarship_inspection')
     scheduler.start()
     logger.info("[Scheduler] Started background automated inspection.")
+
+if __name__ == "__main__":
+    # 允許您直接執行 `python scheduler.py` 進行手動測試
+    logger.info("[Scheduler] Manual execution triggered.")
+    run_inspection()
