@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>獎學金知識庫管理中心 - AI 助理</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="admin.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/choices.js/public/assets/styles/choices.min.css" />
+    <script src="https://cdn.jsdelivr.net/npm/choices.js/public/assets/scripts/choices.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+
+<body>
+    <!-- Login Overlay -->
+    <div id="login-overlay" class="login-overlay active">
+        <div class="login-box glass-panel">
+            <div class="logo large"><img src="/school_logo.png" alt="School Logo" className="header-logo" /></div>
+            <h2>管理員登入</h2>
+            <p>請輸入您的帳號密碼以繼續</p>
+            <form id="login-form">
+                <div class="input-group">
+                    <label>帳號 (Username)</label>
+                    <input type="text" id="l-username" required>
+                </div>
+                <div class="input-group">
+                    <label>密碼 (Password)</label>
+                    <input type="password" id="l-password" required>
+                </div>
+                <button type="submit" class="magic-btn" id="btn-login">登 入</button>
+            </form>
+            <div id="login-error" class="login-error hidden">帳號或密碼錯誤</div>
+        </div>
+    </div>
+
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar glass-panel">
+            <div class="sidebar-header">
+                <div class="logo">✦</div>
+                <h2>知識庫總覽</h2>
+            </div>
+            <div class="sidebar-content">
+                <div class="filter-section">
+                    <div class="search-box">
+                        <input type="text" id="filter-search" placeholder="🔍 搜尋標題或代碼...">
+                    </div>
+                    <div class="filter-group">
+                        <select id="filter-edu" multiple></select>
+                    </div>
+                    <div class="filter-group">
+                        <select id="filter-tags" multiple></select>
+                    </div>
+                    <div class="filter-group">
+                        <select id="filter-identity" multiple></select>
+                    </div>
+                </div>
+
+                <ul id="scholarship-list" class="scholarship-list">
+                    <!-- Javascript populates this -->
+                    <li class="loading-state">載入中...</li>
+                </ul>
+            </div>
+        </aside>
+
+        <!-- Main Stage -->
+        <main class="main-stage">
+            <header class="top-bar glass-panel">
+                <h1>獎學金建檔</h1>
+                <div class="status-indicator" id="status-indicator">
+                    <span class="dot green"></span> 系統已連線
+                </div>
+            </header>
+
+            <div class="content-wrapper">
+
+                <!-- Part 1: Extraction -->
+                <section class="extraction-section glass-panel slide-up">
+                    <div class="section-title">
+                        <h3>1. 來源萃取</h3>
+                        <p>輸入網址或直接貼上原始文字，讓 AI 幫您一鍵解析</p>
+                    </div>
+                    <div class="input-group">
+                        <label for="source-url">獎學金網址 (URL)</label>
+                        <input type="url" id="source-url" placeholder="https://yizhu.tcu.edu.tw/?p=1923">
+                    </div>
+                    <div class="divider"><span>或</span></div>
+                    <div class="input-group">
+                        <label for="source-text">原始文字 (若無網址可直接貼上)</label>
+                        <textarea id="source-text" rows="4" placeholder="請將網頁文字複製貼上於此..."></textarea>
+                    </div>
+
+                    <button class="magic-btn" id="btn-extract">
+                        <!-- <span class="btn-icon">✨</span> -->
+                        <span class="btn-text">讓 AI 預先處理</span>
+                        <div class="shimmer"></div>
+                    </button>
+                    <div id="loading-overlay" class="hidden">
+                        <div class="spinner"></div>
+                        <p>AI 正在閱讀並萃取資訊中...</p>
+                    </div>
+                </section>
+
+                <!-- Part 2 & 3: Form and Markdown Confirmation -->
+                <section class="form-section glass-panel slide-up delay-1 hidden" id="result-section">
+                    <div class="section-title">
+                        <h3>2. 審核 & 修改</h3>
+                        <p>AI 已填妥以下欄位，請確認無誤</p>
+                    </div>
+
+                    <form id="scholarship-form">
+                        <div class="form-grid">
+                            <div class="input-group">
+                                <label>代碼 (UUID)</label>
+                                <input type="text" id="f-code" readonly class="readonly-input">
+                            </div>
+                            <div class="input-group">
+                                <label>標題 (Title)</label>
+                                <input type="text" id="f-title" required>
+                            </div>
+                            <div class="input-group">
+                                <label>網址 (Link)</label>
+                                <input type="url" id="f-link">
+                            </div>
+                            <div class="input-group">
+                                <label>衣珠類別 (Category)</label>
+                                <input type="text" id="f-category">
+                            </div>
+                            <div class="input-group">
+                                <label>學制 (Education System)</label>
+                                <select id="f-edu" multiple></select>
+                            </div>
+                            <div class="input-group">
+                                <label>標籤 (Tags)</label>
+                                <select id="f-tags" multiple></select>
+                            </div>
+                            <div class="input-group">
+                                <label>適用身分 (Identity)</label>
+                                <select id="f-identity" multiple></select>
+                            </div>
+                            <div class="input-group">
+                                <label>申請日期 (Date)</label>
+                                <input type="text" id="f-date">
+                            </div>
+                        </div>
+
+                        <div class="input-group full-width">
+                            <label>金額說明 (Amount Summary)</label>
+                            <input type="text" id="f-amount">
+                        </div>
+                        <div class="input-group full-width">
+                            <label>聯絡人 (Contact)</label>
+                            <input type="text" id="f-contact">
+                        </div>
+                        <div class="input-group full-width">
+                            <label>簡介 (Description)</label>
+                            <textarea id="f-desc" rows="3"></textarea>
+                        </div>
+
+                        <div class="section-title mt-2">
+                            <h3>3. 知識庫 Markdown 預覽</h3>
+                            <p>這將是被切片存入 Milvus 向量資料庫的內容</p>
+                        </div>
+                        <div class="markdown-editor-container">
+                            <textarea id="f-markdown" class="markdown-input" spellcheck="false"></textarea>
+                            <div id="markdown-preview" class="markdown-preview"></div>
+                        </div>
+
+                        <div class="action-bar">
+
+                            <button type="button" class="submit-btn btn-secondary hidden" id="btn-clear">
+                                新增
+                            </button>
+                            <button type="button" class="submit-btn" id="btn-save">
+                                確認無誤，存入資料庫
+                            </button>
+                            <button type="button" class="submit-btn btn-danger hidden" id="btn-delete">
+                                刪除
+                            </button>
+                        </div>
+                    </form>
+                </section>
+
+            </div>
+        </main>
+    </div>
+
+    <!-- Notification Toast -->
+    <div id="toast" class="toast hidden"></div>
+
+    <script src="admin.js?v=4"></script>
+</body>
+
+</html>

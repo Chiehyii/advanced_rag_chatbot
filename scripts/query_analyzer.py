@@ -10,6 +10,10 @@ from prompts import PROMPTS
 # 加上這行以便 standalone 執行時可以讀到 config
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# [BUG-6] 引入 logger，取代 print()
+from logger import get_logger
+logger = get_logger(__name__)
+
 # --- 1. 定義 Pydantic 模型 (雙效合一) ---
 class FilterGroup(BaseModel):
     field: Literal['identity', 'education_system', 'tags'] = Field(
@@ -54,9 +58,8 @@ def get_metadata_schema():
             with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
                 _SCHEMA_CACHE = json.load(f)
         except Exception as e:
-            # 🚨 ERROR：Schema 載入失敗
-            print(f"[Schema] Schema 載入失敗: {e}")
-            # 載入失敗時，回傳空字典，避免後續程式出錯
+            # [BUG-6] 改用 logger 取代 print，統一記錄到日誌系統
+            logger.error(f"[Schema] Schema 載入失敗: {e}", exc_info=True)
             _SCHEMA_CACHE = {
                 "identity": [],
                 "education_system": [],
@@ -143,5 +146,7 @@ async def analyze_query(question: str, lang: str = 'zh') -> tuple[str, str]:
         return intent, ""
         
     except Exception as e:
-        print(f"[Query Analyzer] Error: {e}")
-        return "other", ""
+        # [BUG-6] 改用 logger 精確記錄錯誤，並向上傳播讓呼叫端知道 API 失敗
+        # 注意：不要靜默回傳 ('other', '')，否則使用者問獎學金問題卻收到 Small Talk 回覆
+        logger.error(f"[Query Analyzer] analyze_query failed: {type(e).__name__}: {e}", exc_info=True)
+        raise  # 讓 stream_chat_pipeline 接住並決定如何處理

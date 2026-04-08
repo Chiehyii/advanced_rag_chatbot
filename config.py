@@ -16,9 +16,10 @@ EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
 # --- Authentication & Security ---
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
+ADMIN_PASSWORD_HASH = os.getenv("ADMIN_PASSWORD_HASH")
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
-if not ADMIN_PASSWORD or not JWT_SECRET_KEY:
-    raise ValueError("ADMIN_PASSWORD and JWT_SECRET_KEY must be set in environment variables.")
+if not (ADMIN_PASSWORD or ADMIN_PASSWORD_HASH) or not JWT_SECRET_KEY:
+    raise ValueError("Either ADMIN_PASSWORD or ADMIN_PASSWORD_HASH, and JWT_SECRET_KEY must be set in environment variables.")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 # 1 day
 
@@ -41,6 +42,10 @@ API_SECRET_KEY = os.getenv("API_SECRET_KEY")
 # --- Rate Limiting ---
 RATE_LIMIT_CHAT = os.getenv("RATE_LIMIT_CHAT", "10/minute")
 RATE_LIMIT_FEEDBACK = os.getenv("RATE_LIMIT_FEEDBACK", "20/minute")
+
+# --- Notifications (LINE Messaging API) ---
+LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
+LINE_USER_ID = os.getenv("LINE_USER_ID")
 
 # --- CORS ---
 # 從環境變數讀取允許的來源，預設為本地開發常用的來源

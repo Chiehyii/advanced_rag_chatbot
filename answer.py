@@ -3,6 +3,7 @@ import psycopg2
 import time
 import json
 import asyncio
+import tiktoken  # [OPT-1] Token 預算管理
 from pydantic import BaseModel
 
 from openai import AsyncOpenAI
@@ -18,6 +19,27 @@ from sentence_transformers import CrossEncoder
 # 引入 logger
 from logger import get_logger
 logger = get_logger(__name__)
+
+# [OPT-1] 初始化 tiktoken encoder，用於計算 token 數量
+_tokenizer = tiktoken.get_encoding("cl100k_base")
+_HISTORY_TOKEN_BUDGET = 2500  # 留下足够空間給 RAG context 和回答
+
+def _trim_history_to_budget(history: list, budget: int = _HISTORY_TOKEN_BUDGET) -> list:
+    """
+    [OPT-1] 將對話歷史中超出 token 預算的早期訊息逐一刪除，
+    避免最後 8 條訊息加起來超出模型 context window 造成 API 失敗。
+    策略：從case 最新的訊息開始往前填，直到超出預算為止。
+    """
+    selected = []
+    total_tokens = 0
+    for msg in reversed(history):
+        text = f"{msg.get('role', '')}: {msg.get('content', '')}"
+        tokens = len(_tokenizer.encode(text))
+        if total_tokens + tokens > budget:
+            break
+        selected.append(msg)
+        total_tokens += tokens
+    return list(reversed(selected))
 
 # --- Constants ---
 MIN_RERANK_SCORE = 0.3  # Minimum Cross-Encoder score to keep a document
@@ -42,7 +64,7 @@ async def get_embedding(text):
     )
     return resp.data[0].embedding
 
-async def retrieve_context(question: str, expr: str, lang: str = 'zh', top_k: int = 15):
+async def retrieve_context(question: str, expr: str, lang: str = 'zh', top_k: int = 10):
     """根據問題進行混合檢索 (Dense + Sparse) + 過濾"""
     from pymilvus import AnnSearchRequest, RRFRanker
 
@@ -203,28 +225,16 @@ async def retrieve_context(question: str, expr: str, lang: str = 'zh', top_k: in
 
 def log_and_clean_contexts(retrieved_docs: list):
     """
-    將檢索結果打印到控制台，並返回一個清理過的、可序列化的列表。
+    [CODE-3] 將檢索結果記錄到日誌系統，並回傳一個清理過的、可序列化的列表。
     """
-    print("\n=== RAG檢索結果 ===")
     if not retrieved_docs:
-        # 📝 INFO：記錄檢索結果為空
         logger.info("[RAG] No documents retrieved.")
-        # print("（沒有檢索到任何結果）")
         return []
 
     cleaned_contexts = []
     for i, res in enumerate(retrieved_docs, 1):
         entity = res.get("entity", {})
-        
-        # fallback to distance if score isn't present
         score = res.get("cross_encoder_score", res.get("distance", 0.0))
-        
-        # 📝 INFO：記錄檢索結果
-        # logger.info(f"[RAG] Retrieved document {i}: {entity.get('text', '')[:100]}... (Score: {score:.4f}, Source: {entity.get('source_file', 'N/A')})")
-        # print(f"結果 {i}:")
-        # print(f"內容: {entity.get('text', '')[:100]}...")
-        # print(f"相似度: {score:.4f}, 來源: {entity.get('source_file', 'N/A')}")
-        # print("-" * 50)
 
         identity = entity.get("identity")
         category = entity.get("category")
@@ -291,7 +301,12 @@ async def _rephrase_question_with_history(history: list, question: str, lang: st
     if not history:
         return question
 
-    history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in history[-8:]])
+    # [OPT-1] 動態截取歷史，确保不超出 token 預算
+    trimmed_history = _trim_history_to_budget(history)
+    if not trimmed_history:
+        # 即便是最新一條訊息也超出預算，直接回傳原問題
+        return question
+    history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in trimmed_history])
     system_prompt = PROMPTS[lang]['rephrase_system']
     user_prompt = PROMPTS[lang]['rephrase_user'].format(history_str=history_str, question=question)
 
@@ -367,32 +382,30 @@ async def generate_answer_stream(question: str, cleaned_contexts: list, lang: st
 class SuggestedReplies(BaseModel):
     replies: list[str]
 
-async def generate_suggested_replies(question: str, answer: str, lang: str = 'zh') -> list[str]:
+async def generate_suggested_replies(question: str, context_text: str, lang: str = 'zh') -> list[str]:
     system_prompt = (
         "You are a helpful assistant predicting the user's next questions. Rules:\n"
-        "1. Generate exactly 3 short follow-up questions (under 15 words each).\n"
-        "2. If the answer mentions specific scholarships, the questions MUST target those specific scholarships by name (e.g., 'What is the exact deadline for Scholarship X?').\n"
+        "1. Generate exactly 3 short follow-up questions (under 15 words each) based on the provided reference context.\n"
+        "2. If the context mentions specific scholarships, the questions MUST target those specific scholarships by name (e.g., 'What is the exact deadline for Scholarship X?').\n"
         "3. DO NOT generate broad or generic questions.\n"
-        "4. CRITICAL: DO NOT ask about any information that was already provided in the answer.\n"
-        "5. CRITICAL: DO NOT ask questions that the bot cannot answer, such as asking for someone's personal email, direct phone number, or physical office address."
+        "4. CRITICAL: DO NOT ask questions that the bot cannot answer, such as asking for someone's personal email, direct phone number, or physical office address."
     )
     if lang == 'zh':
         system_prompt = (
-            "你是一個預測使用者意圖的貼心助教。請根據使用者的問題以及你的完整回答，產生 3 個使用者接下來最可能追問的「短問題」。\n"
+            "你是一個預測使用者意圖的貼心助教。請根據使用者的問題以及檢索到的「參考資料(Context)」，產生 3 個使用者接下來最可能追問的「短問題」。\n"
             "【嚴格規則】\n"
             "1. 每個問題必須極度簡短且口語（15字以內）。\n"
-            "2. 如果你的回答中提到了多項獎學金，請**挑其中一個最有代表性的獎學金**名稱來發問（例如：「ＯＯ獎學金的申請表在哪裡下載？」），絕對不要問籠統廣泛的問題（例如：「有哪些推薦的獎學金？」）。\n"
-            "3. **絕對不可以**問回答中「已經提供過的資訊」。\n"
-            "4. **絕對不可以**問「機器人無法回答的問題」，例如：承辦人的信箱是什麼？全球處的地址在哪裡？聯絡電話是幾號？（因為隱私關係，知識庫通常缺乏這些聯絡細節）。\n"
-            "5. 建議詢問：該獎學金的應備文件、申請資格細節、或是截止日期（如果回答中尚未提及）。"
+            "2. 如果參考資料中提到了多項獎學金，請**挑其中一個最有代表性的獎學金**名稱來發問（例如：「ＯＯ獎學金的申請表在哪裡下載？」），絕對不要問籠統廣泛的問題（例如：「有哪些推薦的獎學金？」）。\n"
+            "3. **絕對不可以**問「機器人無法回答的問題」，例如：承辦人的信箱是什麼？全球處的地址在哪裡？聯絡電話是幾號？（因為隱私關係，知識庫通常缺乏這些聯絡細節）。\n"
+            "4. 建議詢問：該獎學金的應備文件、申請資格細節、或是截止日期。"
         )
     
     try:
         response = await openai_client.beta.chat.completions.parse(
-            model="gpt-4o-mini",
+            model=config.OPENAI_MODEL_NAME,  # [OPT-2] 使用 config 而非硬編碼 "gpt-4o-mini"
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"User: {question}\n\nAssistant: {answer}"}
+                {"role": "user", "content": f"User's incoming question: {question}\n\nReference Context:\n{context_text}"}
             ],
             response_format=SuggestedReplies,
             temperature=0.7,
@@ -414,18 +427,38 @@ async def stream_chat_pipeline(question: str, history: list | None = None, lang:
     contexts_for_logging = []
     result_data = {}
     usage_data = {}  # Mutable container to capture streaming token usage
+    stream_completed = False  # [BUG-4] 旗標：只有完整串流後才寫入 DB
 
     try:
-        if history:
+        # if history is not None and len(history) > 0: # len(history) > 0 還是執行rephrased question, 因為可能包含了那句開場白
+        #     rephrased_question = await _rephrase_question_with_history(history, question, lang=lang)
+
+        # 檢查歷史紀錄中，是否有來自使用者的「歷史」發言
+        # 因為前端在傳送時，會把「當下剛發出的問題」也 push 回 history 陣列裡
+        # 所以如果是第一句話，history 裡 user 的發言數量會剛好是 1
+        user_msg_count = sum(1 for msg in (history or []) if msg.get('role') == 'user')
+        
+        if user_msg_count > 1:
             rephrased_question = await _rephrase_question_with_history(history, question, lang=lang)
+        else:
+            # 如果只有 1 筆使用者發言（即當下這句），或是 0 筆，代表這是真正的第一句話
+            rephrased_question = question
+            # 📝 INFO：記錄沒有重新改寫問題
+            logger.info("[Rephrase] Skipped rephrasing because this is the first user query.")
         
         # 📝 INFO：記錄最終問題
         logger.info(f"[Question] Final question: {rephrased_question} (Original: {original_question})")
 
         # --- 1. 先判斷意圖：決定是否需要動用資料庫 ---
-        intent, expr = await analyze_query(rephrased_question, lang=lang)
-        # 📝 INFO：記錄辨識意圖
-        logger.info(f"[Intent] Intent: {intent}, Expr(filter): {expr}")
+        try:
+            intent, expr = await analyze_query(rephrased_question, lang=lang)
+            # 📝 INFO：記錄辨識意圖
+            logger.info(f"[Intent] Intent: {intent}, Expr(filter): {expr}")
+        except Exception as analyze_err:
+            # [BUG-6] analyze_query API 失敗時，降級為不帶 filter 的 RAG 搜尋
+            # 比靜默回傳 'other' 更好：使用者問獎學金，至少還能嘗試檢索
+            logger.warning(f"[Intent] analyze_query failed ({type(analyze_err).__name__}), falling back to unfiltered RAG search.")
+            intent, expr = "scholarship", ""
 
         cleaned_contexts = [] # 預設為空列表
 
@@ -440,6 +473,12 @@ async def stream_chat_pipeline(question: str, history: list | None = None, lang:
         # ---2. 根據是否找到文件決定要走 RAG 還是 Small Talk ---
         if cleaned_contexts:
             logger.info(f"[RAG] RAG path: {len(cleaned_contexts)} relevant documents found.")
+
+            # [優化] 提早發出請求：利用抓取到的 Context 同步預測接下來的按鈕，達到零延遲
+            context_text_for_chips = "\\n".join([c.get('text', '') for c in cleaned_contexts][:3]) # 前 3 篇文檔夠推測了
+            chips_task = asyncio.create_task(
+                generate_suggested_replies(rephrased_question, context_text_for_chips, lang=lang)
+            )
 
             llm_stream = generate_answer_stream(rephrased_question, cleaned_contexts, lang=lang, usage_data=usage_data)
             
@@ -461,8 +500,8 @@ async def stream_chat_pipeline(question: str, history: list | None = None, lang:
             contexts_for_logging = unique_display_contexts # 用於寫入資料庫
             result_data = {"contexts": unique_display_contexts}
             
-            # Predict next questions
-            chips = await generate_suggested_replies(rephrased_question, full_answer, lang=lang)
+            # Predict next questions - await it now, which should return instantly if LLM stream took over 2s!
+            chips = await chips_task
             result_data["chips"] = chips
         
         else:
@@ -490,24 +529,30 @@ async def stream_chat_pipeline(question: str, history: list | None = None, lang:
             chips = await generate_suggested_replies(rephrased_question, full_answer, lang=lang)
             result_data = {"contexts": [], "chips": chips}
 
+        stream_completed = True  # [BUG-4] 到這裡代表兩個串流都完整接收完畢
+
     finally:
         end_time = time.time()
         latency_ms = (end_time - start_time) * 1000
         # 📝 INFO：記錄總耗時
         logger.info(f"[Total latency] {latency_ms:.2f} ms")
         
-        try:
-            usage = usage_data.get("usage")
-            if usage:
-                # 📝 INFO：記錄 Token 使用量
-                logger.info(f"[Token Usage] prompt={usage.prompt_tokens}, completion={usage.completion_tokens}, total={usage.total_tokens}")
-            log_id = await asyncio.to_thread(log_to_db, original_question, rephrased_question, full_answer, contexts_for_logging, latency_ms, usage)
-        except Exception as e:
-            # 🚨 ERROR：寫入資料庫失敗
-            logger.error(f"[DB] log_to_db failed in thread: {e}", exc_info=True)
-            log_id = None
+        # [BUG-4] 只有串流完整完成才寫入 DB，避免因客戶端中途斷線導致不完整資料汙染分析
+        if stream_completed:
+            try:
+                usage = usage_data.get("usage")
+                if usage:
+                    # 📝 INFO：記錄 Token 使用量
+                    logger.info(f"[Token Usage] prompt={usage.prompt_tokens}, completion={usage.completion_tokens}, total={usage.total_tokens}")
+                log_id = await asyncio.to_thread(log_to_db, original_question, rephrased_question, full_answer, contexts_for_logging, latency_ms, usage)
+            except Exception as e:
+                # 🚨 ERROR：寫入資料庫失敗
+                logger.error(f"[DB] log_to_db failed in thread: {e}", exc_info=True)
+                log_id = None
 
-        if log_id:
-            result_data["log_id"] = log_id
+            if log_id:
+                result_data["log_id"] = log_id
+        else:
+            logger.warning(f"[DB] Stream did not complete (client disconnected?), skipping DB log.")
         
         yield {"type": "final_data", "data": result_data}

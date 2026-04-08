@@ -76,7 +76,9 @@ def create_database_and_table():
             markdown_content TEXT,
             content_hash VARCHAR(255),
             last_checked_at TIMESTAMP WITH TIME ZONE,
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            pending_data JSONB,
+            needs_review BOOLEAN DEFAULT FALSE
         );
         """)
         cursor.execute(create_scholarships_table_query)

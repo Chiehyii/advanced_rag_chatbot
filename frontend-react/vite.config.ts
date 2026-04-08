@@ -7,7 +7,9 @@ export default defineConfig({
   server: {
     proxy: {
       '/chat': 'http://127.0.0.1:8000',
-      '/feedback': 'http://127.0.0.1:8000'
+      '/feedback': 'http://127.0.0.1:8000',
+      '/api': 'http://127.0.0.1:8000',
+      '/metadata_schema.json': 'http://127.0.0.1:8000',
     }
   }
 })
