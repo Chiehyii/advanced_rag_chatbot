@@ -42,7 +42,7 @@ def _trim_history_to_budget(history: list, budget: int = _HISTORY_TOKEN_BUDGET) 
     return list(reversed(selected))
 
 # --- Constants ---
-MIN_RERANK_SCORE = 0.3  # Minimum Cross-Encoder score to keep a document
+MIN_RERANK_SCORE = 0.2  # Minimum Cross-Encoder score to keep a document
 
 # --- Initialize Re-Ranking Model ---
 # Using a lightweight, multilingual reranker widely used for RAG (bge-reranker-base or M3)
@@ -56,6 +56,33 @@ milvus_client = MilvusClient(
     token=config.ZILLIZ_API_KEY,
 )
 
+async def _translate_to_zh(text: str) -> str:
+    """
+    將問題翻譯成繁體中文，供 BM25 Sparse Search 與 Cross-Encoder 使用。
+    當使用者以英文提問，但知識庫為中文時，此翻譯能大幅提升語意相似度。
+    若翻譯失敗則 fallback 回原文。
+    """
+    try:
+        response = await openai_client.chat.completions.create(
+            model=config.OPENAI_MODEL_NAME,
+            messages=[
+                {"role": "system", "content": (
+                    "You are a professional translator. "
+                    "Translate the user's text into Traditional Chinese (繁體中文). "
+                    "Output ONLY the translated text, no explanations."
+                )},
+                {"role": "user", "content": text}
+            ],
+            temperature=0.0,
+            max_tokens=300,
+        )
+        translated = response.choices[0].message.content.strip()
+        logger.info(f"[Translate] '{text}' → '{translated}'")
+        return translated
+    except Exception as e:
+        logger.warning(f"[Translate] Translation failed ({type(e).__name__}): {e}. Using original query.")
+        return text
+
 async def get_embedding(text):
     """產生文字向量"""
     resp = await openai_client.embeddings.create(
@@ -68,7 +95,15 @@ async def retrieve_context(question: str, expr: str, lang: str = 'zh', top_k: in
     """根據問題進行混合檢索 (Dense + Sparse) + 過濾"""
     from pymilvus import AnnSearchRequest, RRFRanker
 
-    # 1. 產生問題的向量 (Dense)
+    # 1. 若使用者以英文提問，先翻成中文
+    #    - Dense embedding 用原文 (OpenAI 多語言向量跨語言效果尚可)
+    #    - BM25 Sparse & Cross-Encoder 用中文翻譯 (這兩者對中文文件需要中文輸入)
+    if lang == 'en':
+        question_for_retrieval = await _translate_to_zh(question)
+    else:
+        question_for_retrieval = question
+
+    # 2. 產生問題的向量 (Dense) — 使用原始問題
     question_dense_embedding = await get_embedding(question)
 
     # 2. 產生問題的向量 (Sparse) - 使用 Server-side BM25 Function
@@ -85,10 +120,10 @@ async def retrieve_context(question: str, expr: str, lang: str = 'zh', top_k: in
         expr=expr
     )
 
-    # Sparse Request (Server-side BM25)
-    sparse_search_params = {"metric_type": "BM25", "params": {}} 
+    # Sparse Request (Server-side BM25) — 使用中文翻譯，才能比對到中文 token
+    sparse_search_params = {"metric_type": "BM25", "params": {}}
     sparse_req = AnnSearchRequest(
-        data=[question], # 直接傳文字，依賴 Server-side Function 轉換
+        data=[question_for_retrieval],  # 中文翻譯版本，BM25 才有效
         anns_field="text_sparse",
         param=sparse_search_params,
         limit=top_k,
@@ -189,10 +224,11 @@ async def retrieve_context(question: str, expr: str, lang: str = 'zh', top_k: in
     logger.info(f"[Re-Ranking] Milvus returned {len(milvus_docs)} candidate documents. Starting Cross-Encoder scoring...")
     
     # Prepare pairs for scoring: (question, document_text)
+    # Cross-Encoder 使用中文翻譯版本，與中文文件配對才能得到正確的語意分數
     pairs = []
     for doc in milvus_docs:
         doc_text = doc.get("entity", {}).get("text", "")
-        pairs.append([question, doc_text])
+        pairs.append([question_for_retrieval, doc_text])
         
     if not pairs:
         return []
@@ -208,14 +244,35 @@ async def retrieve_context(question: str, expr: str, lang: str = 'zh', top_k: in
         doc["cross_encoder_score"] = float(scores[i])
         
     milvus_docs.sort(key=lambda x: x["cross_encoder_score"], reverse=True)
-    
+
+    # 🔍 INFO：印出所有候選文件的分數，方便診斷為何通不過門檻
+    logger.info(f"[Re-Ranking] Candidate documents with scores (threshold={MIN_RERANK_SCORE}):")
+    for rank, doc in enumerate(milvus_docs, 1):
+        entity = doc.get("entity", {})
+        score = doc.get("cross_encoder_score", 0.0)
+        source = entity.get("source_file", "N/A")
+        identity = list(entity.get("identity") or [])
+        snippet = (entity.get("text") or "")[:80].replace("\n", " ")
+        passed = "✓" if score >= MIN_RERANK_SCORE else "✗"
+        logger.info(
+            f"  [{rank}] {passed} score={score:.4f} | source={source} | "
+            f"identity={identity} | text='{snippet}...'"
+        )
+
     # Pick the Top 5 most relevant, then filter by minimum score threshold
     top_n = min(5, len(milvus_docs))
     refined_docs = [d for d in milvus_docs[:top_n] if d["cross_encoder_score"] >= MIN_RERANK_SCORE]
     
     if not refined_docs:
-        # 📝 INFO：記錄 Cross-Encoder Re-Ranking 失敗
-        logger.info(f"[Re-Ranking] No documents passed the minimum score threshold ({MIN_RERANK_SCORE}).")
+        # 📝 INFO：記錄 Cross-Encoder Re-Ranking 失敗，並印出 top 候選分數
+        top_scores = ", ".join(
+            f"{d.get('entity', {}).get('source_file', 'N/A')}={d.get('cross_encoder_score', 0.0):.4f}"
+            for d in milvus_docs[:top_n]
+        )
+        logger.info(
+            f"[Re-Ranking] No documents passed the minimum score threshold ({MIN_RERANK_SCORE}). "
+            f"Top-{top_n} candidate scores: [{top_scores}]"
+        )
         return []
     
     # 📝 INFO：記錄 Cross-Encoder Re-Ranking 成功
