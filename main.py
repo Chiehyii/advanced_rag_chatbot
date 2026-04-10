@@ -62,6 +62,8 @@ class ChatRequest(BaseModel):
                                        description="Chat history. Max 20 messages.")
     lang: Optional[str] = Field('zh', pattern='^(zh|en)$',
                                 description="Language code: 'zh' or 'en' only.")
+    title_filter: List[str] | None = Field(None, max_length=3,
+                                           description="Optional list of scholarship titles to narrow RAG search. Max 3.")
 
 class FeedbackRequest(BaseModel):
     """Request model for submitting feedback."""
@@ -100,7 +102,7 @@ async def chat_endpoint(request: Request, chat_request: ChatRequest):
             # ---------------------------------------------------------------------------------
 
             # The pipeline now yields events (content chunks or final data)
-            async for event in stream_chat_pipeline(chat_request.query, chat_request.history or [], chat_request.lang):
+            async for event in stream_chat_pipeline(chat_request.query, chat_request.history or [], chat_request.lang, title_filter=chat_request.title_filter):
                 event_type = event.get("type")
                 data = event.get("data")
 
@@ -175,6 +177,60 @@ async def feedback_endpoint(request: Request, feedback_request: FeedbackRequest)
     # 📝 INFO：記錄成功更新回饋
     logger.info(f"[Feedback] Successfully updated feedback for log_id: {feedback_request.log_id}")
     return {"status": "success", "message": "Feedback recorded."}
+
+# --- Public Scholarship Filter API ---
+@app.get("/scholarships/filter")
+@limiter.limit("20/minute")
+async def filter_scholarships(request: Request):
+    """
+    公開端點：回傳獎學金清單（僅包含 title + metadata），供前端篩選 Modal 使用。
+    不需要管理員認證，但有速率限制。
+    """
+    def _query_scholarships():
+        if not config.DB_POOL:
+            return []
+        conn = config.DB_POOL.getconn()
+        cursor = None
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT scholarship_code, title, category, tags "
+                "FROM scholarships ORDER BY title;"
+            )
+            rows = cursor.fetchall()
+            result = []
+            for row in rows:
+                cat = row[2]
+                tags_val = row[3]
+                # Parse JSON arrays safely
+                def _safe_parse(v):
+                    if not v:
+                        return []
+                    if isinstance(v, list):
+                        return v
+                    try:
+                        parsed = json.loads(v)
+                        return parsed if isinstance(parsed, list) else []
+                    except (json.JSONDecodeError, TypeError):
+                        return []
+                result.append({
+                    "scholarship_code": str(row[0]),
+                    "title": row[1],
+                    "category": cat or "",
+                    "tags": _safe_parse(tags_val),
+                })
+            return result
+        except Exception as e:
+            logger.error(f"[Filter API] Failed to query scholarships: {e}", exc_info=True)
+            return []
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                config.DB_POOL.putconn(conn)
+
+    data = await asyncio.to_thread(_query_scholarships)
+    return {"status": "success", "data": data}
 
 # --- Static Files and Schemas ---
 @app.get("/metadata_schema.json")

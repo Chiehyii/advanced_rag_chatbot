@@ -15,6 +15,8 @@
   --table-header-bg: #eaf1fa;
   --table-even-bg: #f9f9f9;
   --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --button-able: #adb1b9;
+  --button-disabled: #e4e4e4;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -34,6 +36,8 @@
     --card-text: #b0b0b0;
     --table-header-bg: #313131;
     --table-even-bg: #1a1a1a;
+    --button-able: #e0e0e0;
+    --button-disabled: #636363;
   }
 }
 
@@ -430,7 +434,7 @@ body {
   color: var(--text-color);
   margin-bottom: 10px;
   text-align: center;
-  letter-spacing: -0.02em;
+  letter-spacing: 0.02em;
 }
 
 .language-switcher-floating {
@@ -556,7 +560,7 @@ body {
 #send-button {
   background: transparent;
   border: none;
-  color: #adb1b9;
+  color: var(--button-able);
   border-radius: 50%;
   cursor: pointer;
   font-size: 1.5rem;
@@ -576,7 +580,7 @@ body {
 }
 
 #send-button:disabled {
-  color: #e0e0e0;
+  color: var(--button-disabled);
   cursor: not-allowed;
   transform: none;
 }
@@ -922,4 +926,356 @@ a.inline-citation:hover sup {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* ======== Scholarship Filter Modal ======== */
+
+.filter-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.25);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  z-index: 1100;
+  animation: fadeIn 0.15s ease-out;
+}
+
+.filter-modal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 90%;
+  max-width: 520px;
+  max-height: 80vh;
+  background: var(--chat-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+  z-index: 1101;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: modalSlideIn 0.2s ease-out;
+}
+
+@keyframes modalSlideIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -48%);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+.filter-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.filter-modal-header h3 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text-color);
+}
+
+.filter-modal-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.filter-modal-close:hover {
+  background-color: var(--card-hover-bg);
+  color: var(--text-color);
+}
+
+/* Dropdown Row */
+.filter-dropdown-row {
+  display: flex;
+  gap: 10px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.filter-dropdown-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 120px;
+}
+
+.filter-dropdown-group label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.filter-dropdown-group select {
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background-color: var(--input-bg);
+  color: var(--text-color);
+  font-family: var(--font-family);
+  font-size: 0.85rem;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  appearance: auto;
+}
+
+/* Results Header */
+.filter-results-header {
+  padding: 12px 20px 8px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.filter-results-count {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.filter-max-hint {
+  margin-left: auto;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-color);
+  background: var(--card-hover-bg);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+/* Results List */
+.filter-results-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.filter-results-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.filter-results-list::-webkit-scrollbar-thumb {
+  background-color: #ccc;
+  border-radius: 3px;
+}
+
+.filter-results-list::-webkit-scrollbar-track {
+  background-color: transparent;
+}
+
+/* Result Card */
+.filter-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--card-bg);
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+}
+
+.filter-card:hover:not(.filter-card-disabled):not(.filter-card-selected) {
+  background-color: var(--card-hover-bg);
+  border-color: var(--border-color);
+  transform: translateX(3px);
+}
+
+.filter-card:active:not(.filter-card-disabled) {
+  transform: scale(0.98);
+}
+
+.filter-card-selected {
+  background-color: var(--card-hover-bg);
+  border-color: var(--border-color);
+  cursor: default;
+}
+
+.filter-card-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.filter-card-icon {
+  font-size: 1.1rem;
+  flex-shrink: 0;
+}
+
+.filter-card-title {
+  flex: 1;
+  font-size: 0.9rem;
+  color: var(--text-color);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.filter-card-check {
+  color: var(--text-color);
+  font-weight: 700;
+  font-size: 0.9rem;
+  flex-shrink: 0;
+}
+
+.filter-loading,
+.filter-empty {
+  text-align: center;
+  padding: 30px 10px;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+/* ======== Scholarship Tags in Input ======== */
+
+.scholarship-tags-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 4px 2px;
+}
+
+.scholarship-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--card-hover-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 3px 8px 3px 10px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  font-weight: 500;
+  max-width: 200px;
+  transition: background-color 0.15s ease;
+}
+
+.scholarship-tag:hover {
+  background: var(--card-hover-bg);
+}
+
+.scholarship-tag-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.scholarship-tag-remove {
+  background: none;
+  border: none;
+  color: var(--text-color);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.15s ease, background-color 0.15s ease;
+  flex-shrink: 0;
+}
+
+.scholarship-tag:hover .scholarship-tag-remove {
+  opacity: 1;
+}
+
+.scholarship-tag-remove:hover {
+  background-color: rgba(134, 134, 134, 0.2);
+}
+
+/* ======== Filter Trigger (+) Button ======== */
+
+.filter-trigger-btn {
+  background: none;
+  border: 1px solid var(--border-color);
+  color: var(--button-able);
+  border-radius: 8px;
+  cursor: pointer;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  margin-right: auto;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.filter-trigger-btn:hover:not(:disabled) {
+  background-color: var(--card-hover-bg);
+  color: var(--link-color);
+  border-color: var(--link-color);
+}
+
+.filter-trigger-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ======== RWD for Filter Modal ======== */
+@media (max-width: 768px) {
+  .filter-modal {
+    width: 95%;
+    max-height: 85vh;
+    border-radius: 12px;
+  }
+
+  .filter-dropdown-row {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .filter-dropdown-group {
+    min-width: 100%;
+  }
+
+  .scholarship-tag {
+    max-width: 160px;
+  }
 }

@@ -473,9 +473,10 @@ async def generate_suggested_replies(question: str, context_text: str, lang: str
         logger.warning(f"[Rephrase] Failed to predict follow-up questions: {e}", exc_info=True)
         return []
 
-async def stream_chat_pipeline(question: str, history: list | None = None, lang: str = 'zh'):
+async def stream_chat_pipeline(question: str, history: list | None = None, lang: str = 'zh', title_filter: list[str] | None = None):
     """
     Orchestrates the entire RAG pipeline for streaming responses.
+    title_filter: 使用者透過 Tag 引用的獎學金 title 列表（最多 3 個），會直接作為 Milvus source_file filter。
     """
     start_time = time.time()
     full_answer = ""
@@ -506,16 +507,32 @@ async def stream_chat_pipeline(question: str, history: list | None = None, lang:
         # 📝 INFO：記錄最終問題
         logger.info(f"[Question] Final question: {rephrased_question} (Original: {original_question})")
 
-        # --- 1. 先判斷意圖：決定是否需要動用資料庫 ---
-        try:
-            intent, expr = await analyze_query(rephrased_question, lang=lang)
-            # 📝 INFO：記錄辨識意圖
-            logger.info(f"[Intent] Intent: {intent}, Expr(filter): {expr}")
-        except Exception as analyze_err:
-            # [BUG-6] analyze_query API 失敗時，降級為不帶 filter 的 RAG 搜尋
-            # 比靜默回傳 'other' 更好：使用者問獎學金，至少還能嘗試檢索
-            logger.warning(f"[Intent] analyze_query failed ({type(analyze_err).__name__}), falling back to unfiltered RAG search.")
-            intent, expr = "scholarship", ""
+        # --- 1. 判斷是否有 Tag 引用（title_filter），決定檢索策略 ---
+        if title_filter and len(title_filter) > 0:
+            # 使用者已透過 Tag 明確指定獎學金 → 略過 LLM 意圖分析，直接組裝 Milvus filter
+            intent = "scholarship"
+            # 組裝 source_file filter: source_file in ["title1.md", "title2.md"]
+            safe_titles = [t.replace('"', '\\"') for t in title_filter[:3]]  # 最多 3 個，轉義雙引號
+            title_exprs = ", ".join([f'"{t}.md"' for t in safe_titles])
+            expr = f"source_file in [{title_exprs}]"
+            logger.info(f"[Title Filter] User selected tags: {title_filter} → Milvus expr: {expr}")
+            
+            # 將獎學金標題注入問題中，讓後續的檢索和 LLM 都有明確的主詞
+            title_str = "、".join(title_filter[:3]) if lang == 'zh' else ", ".join(title_filter[:3])
+            prefix = f"關於「{title_str}」：" if lang == 'zh' else f"Regarding '{title_str}': "
+            rephrased_question = prefix + rephrased_question
+            logger.info(f"[Title Filter] Injected tags into question: {rephrased_question}")
+        else:
+            # 無 Tag 引用 → 走原有的 LLM 意圖分析 + filter 提取
+            try:
+                intent, expr = await analyze_query(rephrased_question, lang=lang)
+                # 📝 INFO：記錄辨識意圖
+                logger.info(f"[Intent] Intent: {intent}, Expr(filter): {expr}")
+            except Exception as analyze_err:
+                # [BUG-6] analyze_query API 失敗時，降級為不帶 filter 的 RAG 搜尋
+                # 比靜默回傳 'other' 更好：使用者問獎學金，至少還能嘗試檢索
+                logger.warning(f"[Intent] analyze_query failed ({type(analyze_err).__name__}), falling back to unfiltered RAG search.")
+                intent, expr = "scholarship", ""
 
         cleaned_contexts = [] # 預設為空列表
 

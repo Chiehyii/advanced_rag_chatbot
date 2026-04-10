@@ -4,7 +4,8 @@ import { ChatHeader } from './components/ChatHeader';
 import { MessageList } from './components/MessageList';
 import { ChatInput } from './components/ChatInput';
 import { FeedbackModal } from './components/FeedbackModal';
-import { Message, Language } from './types';
+import { ScholarshipFilterModal } from './components/ScholarshipFilterModal';
+import { Message, Language, ScholarshipTag } from './types';
 import { AdminApp } from './admin/AdminApp';
 import './index.css';
 const CHAT_STORAGE_KEY = 'tcu_scholarship_chat_history';
@@ -43,7 +44,17 @@ export const translations = {
     help_button_title: "Get Help",
     help_alert: "聯絡資訊\n\n電話: (03) 856-5301 ext.00000\n郵箱: example@gms.tcu.edu.tw",
     show_more: "顯示全部",
-    show_less: "收起"
+    show_less: "收起",
+    filter_title: "獎學金篩選",
+    filter_category: "類別",
+    filter_tags: "條件",
+    filter_all: "全部",
+    filter_results: "篩選結果",
+    filter_results_unit: "筆",
+    filter_max_hint: "已達上限 3 個",
+    filter_loading: "載入中...",
+    filter_empty: "沒有符合的結果",
+    filter_remove_tag: "移除"
   },
   en: {
     welcome_title: "Hello! What would you like to know about scholarships?",
@@ -78,7 +89,17 @@ export const translations = {
     help_button_title: "Get Help",
     help_alert: "Contact Information\n\nPhone: (03) 856-5301 ext.00000\nEmail: example@gms.tcu.edu.tw",
     show_more: "Show all",
-    show_less: "Show less"
+    show_less: "Show less",
+    filter_title: "Scholarship Filter",
+    filter_category: "Category",
+    filter_tags: "Category",
+    filter_all: "All",
+    filter_results: "Results",
+    filter_results_unit: "items",
+    filter_max_hint: "Max 3 reached",
+    filter_loading: "Loading...",
+    filter_empty: "No matching results",
+    filter_remove_tag: "Remove"
   }
 };
 function App() {
@@ -98,6 +119,9 @@ function App() {
   // Feedback state
   const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
   const [currentFeedbackLogId, setCurrentFeedbackLogId] = useState<string | null>(null);
+  // Scholarship filter & tag state
+  const [selectedTags, setSelectedTags] = useState<ScholarshipTag[]>([]);
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
   // Persist messages to sessionStorage whenever they change
   useEffect(() => {
     // Only save completed (non-streaming) messages
@@ -135,7 +159,12 @@ function App() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ query: text, history, lang: language })
+        body: JSON.stringify({
+          query: text,
+          history,
+          lang: language,
+          title_filter: selectedTags.length > 0 ? selectedTags.map(t => t.title) : null,
+        })
       });
       if (!response.ok) {
         throw new Error('Network response was not ok');
@@ -244,11 +273,22 @@ function App() {
   };
   const handleClearChat = () => {
     setMessages([]);
+    setSelectedTags([]);  // Clear tags when clearing chat
     try {
       sessionStorage.removeItem(CHAT_STORAGE_KEY);
     } catch (e) {
       console.warn('Failed to clear chat history from sessionStorage:', e);
     }
+  };
+  const handleAddTag = (tag: ScholarshipTag) => {
+    setSelectedTags(prev => {
+      if (prev.length >= 3) return prev;
+      if (prev.some(t => t.scholarship_code === tag.scholarship_code)) return prev;
+      return [...prev, tag];
+    });
+  };
+  const handleRemoveTag = (scholarshipCode: string) => {
+    setSelectedTags(prev => prev.filter(t => t.scholarship_code !== scholarshipCode));
   };
   const handleFeedback = async (logId: string, type: 'like' | 'dislike' | null) => {
     // Send feedback to backend
@@ -296,6 +336,9 @@ function App() {
                     onHelp={() => window.open('https://oia.tcu.edu.tw', '_blank')}
                     language={language}
                     isInitial={true}
+                    selectedTags={selectedTags}
+                    onRemoveTag={handleRemoveTag}
+                    onOpenFilter={() => setIsFilterOpen(true)}
                   />
                   <div className="example-questions-container initial-chips">
                     {[
@@ -332,6 +375,9 @@ function App() {
                     onClearChat={handleClearChat}
                     onHelp={() => window.open('https://oia.tcu.edu.tw', '_blank')}
                     language={language}
+                    selectedTags={selectedTags}
+                    onRemoveTag={handleRemoveTag}
+                    onOpenFilter={() => setIsFilterOpen(true)}
                   />
                 </>
               )}
@@ -341,6 +387,13 @@ function App() {
             isOpen={isFeedbackOpen}
             onClose={() => setIsFeedbackOpen(false)}
             onSubmit={handleFeedbackSubmit}
+            language={language}
+          />
+          <ScholarshipFilterModal
+            isOpen={isFilterOpen}
+            onClose={() => setIsFilterOpen(false)}
+            onSelectScholarship={handleAddTag}
+            selectedTags={selectedTags}
             language={language}
           />
         </>

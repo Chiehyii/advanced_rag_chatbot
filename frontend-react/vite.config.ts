@@ -10,6 +10,7 @@ export default defineConfig({
       '/feedback': 'http://127.0.0.1:8000',
       '/api': 'http://127.0.0.1:8000',
       '/metadata_schema.json': 'http://127.0.0.1:8000',
+      '/scholarships': 'http://127.0.0.1:8000',
     }
   }
 })
