@@ -20,6 +20,9 @@ import hashlib
 from datetime import datetime, timedelta, timezone
 import jwt
 from utils import is_safe_url
+from logger import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api", tags=["admin"])
 openai_client = OpenAI(api_key=config.OPENAI_API_KEY)
@@ -230,33 +233,25 @@ async def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends
             headers={"WWW-Authenticate": "Bearer"},
         )
         
-    # [SEC-1] 優先使用 Hash 比對，若未設定則退回使用明文比對
-    if config.ADMIN_PASSWORD_HASH:
-        # Bcrypt has a 72-byte limit. Truncate identical to generate_hash.py
-        password_to_check = form_data.password[:72].encode('utf-8')
-        try:
-            is_valid = bcrypt.checkpw(password_to_check, config.ADMIN_PASSWORD_HASH.encode('utf-8'))
-        except ValueError:
-            is_valid = False
-
-        if not is_valid:
-            raise HTTPException(
-                status_code=401,
-                detail="Incorrect username or password",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-    elif config.ADMIN_PASSWORD:
-        if form_data.password != config.ADMIN_PASSWORD:
-            raise HTTPException(
-                status_code=401,
-                detail="Incorrect username or password",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        print("WARNING: Using plaintext ADMIN_PASSWORD. Please generate a hash and use ADMIN_PASSWORD_HASH in .env instead.")
-    else:
+    # [SEC-1] 強制使用 Hash 比對，移除明文備用機制
+    if not config.ADMIN_PASSWORD_HASH:
         raise HTTPException(
             status_code=500,
             detail="Server configuration error regarding admin credentials."
+        )
+
+    # Bcrypt has a 72-byte limit. Truncate identical to generate_hash.py
+    password_to_check = form_data.password[:72].encode('utf-8')
+    try:
+        is_valid = bcrypt.checkpw(password_to_check, config.ADMIN_PASSWORD_HASH.encode('utf-8'))
+    except ValueError:
+        is_valid = False
+
+    if not is_valid:
+        raise HTTPException(
+            status_code=401,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
         )
     access_token_expires = timedelta(minutes=config.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
@@ -311,7 +306,8 @@ def list_scholarships(current_admin: str = Depends(verify_admin)):
             })
         return {"status": "success", "data": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"[Admin API] Internal error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal Server Error")
     finally:
         if 'cursor' in locals() and cursor:
             cursor.close()
@@ -350,7 +346,8 @@ def get_scholarship(scholarship_code: str, current_admin: str = Depends(verify_a
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"[Admin API] Internal error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal Server Error")
     finally:
         if 'cursor' in locals() and cursor:
             cursor.close()
@@ -371,7 +368,8 @@ def discard_pending(scholarship_code: str, current_admin: str = Depends(verify_a
         conn.commit()
         return {"status": "success", "message": "Pending changes discarded"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"[Admin API] Internal error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal Server Error")
     finally:
         if 'cursor' in locals() and cursor:
             cursor.close()
@@ -435,7 +433,8 @@ def extract_scholarship_info(request: ExtractRequest, current_admin: str = Depen
         return {"status": "success", "data": extracted_data}
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Extraction failed: {str(e)}")
+        logger.error(f"[Admin API] extract_scholarship_info error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Extraction failed due to internal error.")
 
 
 @router.post("/scholarships")
@@ -479,7 +478,8 @@ def save_scholarship(form: ScholarshipForm, current_admin: str = Depends(verify_
         ))
         conn.commit()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"DB Error: {str(e)}")
+        logger.error(f"[Admin API] DB error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="DB Error")
     finally:
         if 'cursor' in locals() and cursor:
             cursor.close()
@@ -499,7 +499,8 @@ def save_scholarship(form: ScholarshipForm, current_admin: str = Depends(verify_
         )
         return {"status": "success", "message": f"Saved {count} chunks to Knowledge Base"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Vector DB Error: {str(e)}")
+        logger.error(f"[Admin API] Vector DB error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Vector DB Error")
 
 @router.put("/scholarships/{scholarship_code}")
 def update_scholarship(scholarship_code: str, form: ScholarshipForm, current_admin: str = Depends(verify_admin)):
@@ -529,7 +530,8 @@ def update_scholarship(scholarship_code: str, form: ScholarshipForm, current_adm
         ))
         conn.commit()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"DB Error: {str(e)}")
+        logger.error(f"[Admin API] DB error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="DB Error")
     finally:
         if 'cursor' in locals() and cursor:
             cursor.close()
@@ -552,7 +554,8 @@ def update_scholarship(scholarship_code: str, form: ScholarshipForm, current_adm
         )
         return {"status": "success", "message": f"Updated {count} chunks in Knowledge Base"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Vector DB Error: {str(e)}")
+        logger.error(f"[Admin API] Vector DB error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Vector DB Error")
 
 
 
@@ -573,7 +576,8 @@ def delete_scholarship(scholarship_code: str, current_admin: str = Depends(verif
         )
         milvus_client.flush(collection_name=collection_name)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Vector DB Error (DB record preserved): {str(e)}")
+        logger.error(f"[Admin API] delete_scholarship Vector DB error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Vector DB Error (DB record preserved)")
 
     # 2. Milvus 刪除成功後，再刪 PostgreSQL
     try:
@@ -583,7 +587,8 @@ def delete_scholarship(scholarship_code: str, current_admin: str = Depends(verif
         conn.commit()
         return {"status": "success", "message": "Successfully deleted from Knowledge Base and DB"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"DB Error (vectors already removed): {str(e)}")
+        logger.error(f"[Admin API] delete_scholarship DB error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="DB Error (vectors already removed)")
     finally:
         if 'cursor' in locals() and cursor:
             cursor.close()
