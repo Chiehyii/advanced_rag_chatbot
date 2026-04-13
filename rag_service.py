@@ -243,6 +243,61 @@ async def generate_answer_stream(question: str, cleaned_contexts: list, lang: st
             content = chunk.choices[0].delta.content or ""
             yield content
 
+async def _handle_rag_branch(rephrased_question: str, cleaned_contexts: list, lang: str, usage_data: dict):
+    logger.info(f"[RAG] RAG path: {len(cleaned_contexts)} relevant documents found.")
+    context_text_for_chips = "\\n".join([c.get('text', '') for c in cleaned_contexts][:3])
+    chips_task = asyncio.create_task(
+        generate_suggested_replies(rephrased_question, context_text_for_chips, lang=lang)
+    )
+
+    llm_stream = generate_answer_stream(rephrased_question, cleaned_contexts, lang=lang, usage_data=usage_data)
+    
+    full_answer = ""
+    async for chunk in llm_stream:
+        full_answer += chunk
+        yield {"type": "content", "data": chunk}
+
+    unique_display_contexts = []
+    seen_keys = set()
+    for context in cleaned_contexts:
+        unique_key = context.get('source_file')
+        if unique_key and unique_key not in seen_keys:
+            unique_display_contexts.append(context)
+            seen_keys.add(unique_key)
+    
+    contexts_for_logging = unique_display_contexts
+    result_data = {"contexts": unique_display_contexts}
+    
+    chips = await chips_task
+    result_data["chips"] = chips
+    
+    yield {"type": "branch_done", "full_answer": full_answer, "contexts_for_logging": contexts_for_logging, "result_data": result_data}
+
+async def _handle_small_talk_branch(rephrased_question: str, lang: str, usage_data: dict):
+    logger.info(f"[Small Talk] Fallback to small talk: No relevant documents found.")
+    stream = await openai_client.chat.completions.create(
+        model=config.OPENAI_MODEL_NAME,
+        messages=[
+            {"role": "system", "content": PROMPTS[lang]['small_talk_system']},
+            {"role": "user", "content": rephrased_question}
+        ],
+        temperature=0.7,
+        stream=True,
+        stream_options={"include_usage": True},
+    )
+    full_answer = ""
+    async for chunk in stream:
+        if chunk.usage:
+            usage_data["usage"] = chunk.usage
+        if chunk.choices:
+            content = chunk.choices[0].delta.content or ""
+            full_answer += content
+            yield {"type": "content", "data": content}
+    
+    chips = await generate_suggested_replies(rephrased_question, full_answer, lang=lang)
+    result_data = {"contexts": [], "chips": chips}
+    yield {"type": "branch_done", "full_answer": full_answer, "contexts_for_logging": [], "result_data": result_data}
+
 async def stream_chat_pipeline(question: str, history: list | None = None, lang: str = 'zh', title_filter: list[str] | None = None):
     """
     Orchestrates the entire RAG pipeline for streaming responses.
@@ -296,55 +351,21 @@ async def stream_chat_pipeline(question: str, history: list | None = None, lang:
             logger.info(f"[Pipeline] Intent is '{intent}', skipping retrieval.")
         
         if cleaned_contexts:
-            logger.info(f"[RAG] RAG path: {len(cleaned_contexts)} relevant documents found.")
-
-            context_text_for_chips = "\\n".join([c.get('text', '') for c in cleaned_contexts][:3])
-            chips_task = asyncio.create_task(
-                generate_suggested_replies(rephrased_question, context_text_for_chips, lang=lang)
-            )
-
-            llm_stream = generate_answer_stream(rephrased_question, cleaned_contexts, lang=lang, usage_data=usage_data)
-            
-            async for chunk in llm_stream:
-                full_answer += chunk
-                yield {"type": "content", "data": chunk}
-
-            unique_display_contexts = []
-            seen_keys = set()
-            for context in cleaned_contexts:
-                unique_key = context.get('source_file')
-                if unique_key and unique_key not in seen_keys:
-                    unique_display_contexts.append(context)
-                    seen_keys.add(unique_key)
-            
-            contexts_for_logging = unique_display_contexts
-            result_data = {"contexts": unique_display_contexts}
-            
-            chips = await chips_task
-            result_data["chips"] = chips
-        
+            async for chunk in _handle_rag_branch(rephrased_question, cleaned_contexts, lang, usage_data):
+                if chunk["type"] == "branch_done":
+                    full_answer = chunk["full_answer"]
+                    contexts_for_logging = chunk["contexts_for_logging"]
+                    result_data = chunk["result_data"]
+                else:
+                    yield chunk
         else:
-            logger.info(f"[Small Talk] Fallback to small talk: No relevant documents found.")
-            stream = await openai_client.chat.completions.create(
-                model=config.OPENAI_MODEL_NAME,
-                messages=[
-                    {"role": "system", "content": PROMPTS[lang]['small_talk_system']},
-                    {"role": "user", "content": rephrased_question}
-                ],
-                temperature=0.7,
-                stream=True,
-                stream_options={"include_usage": True},
-            )
-            async for chunk in stream:
-                if chunk.usage:
-                    usage_data["usage"] = chunk.usage
-                if chunk.choices:
-                    content = chunk.choices[0].delta.content or ""
-                    full_answer += content
-                    yield {"type": "content", "data": content}
-            
-            chips = await generate_suggested_replies(rephrased_question, full_answer, lang=lang)
-            result_data = {"contexts": [], "chips": chips}
+            async for chunk in _handle_small_talk_branch(rephrased_question, lang, usage_data):
+                if chunk["type"] == "branch_done":
+                    full_answer = chunk["full_answer"]
+                    contexts_for_logging = chunk["contexts_for_logging"]
+                    result_data = chunk["result_data"]
+                else:
+                    yield chunk
 
         stream_completed = True
 
