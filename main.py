@@ -12,7 +12,7 @@ import psycopg2
 import traceback
 import json
 from fastapi.responses import StreamingResponse, JSONResponse
-from answer import stream_chat_pipeline
+from rag_service import stream_chat_pipeline
 import admin_api
 from scheduler import start_scheduler
 from logger import get_logger
