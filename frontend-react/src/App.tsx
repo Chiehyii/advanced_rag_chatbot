@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, Suspense } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { ChatHeader } from './components/ChatHeader';
 import { MessageList } from './components/MessageList';
@@ -6,8 +6,9 @@ import { ChatInput } from './components/ChatInput';
 import { FeedbackModal } from './components/FeedbackModal';
 import { ScholarshipFilterModal } from './components/ScholarshipFilterModal';
 import { Message, Language, ScholarshipTag } from './types';
-import { AdminApp } from './admin/AdminApp';
 import './index.css';
+
+const AdminApp = React.lazy(() => import('./admin/AdminApp').then(module => ({ default: module.AdminApp })));
 const CHAT_STORAGE_KEY = 'tcu_scholarship_chat_history';
 // --- i18n Dictionaries ---
 export const translations = {
@@ -320,7 +321,11 @@ function App() {
   const t = translations[language];
   return (
     <Routes>
-      <Route path="/admin/*" element={<AdminApp />} />
+      <Route path="/admin/*" element={
+        <Suspense fallback={<div style={{ padding: '20px', textAlign: 'center', color: '#fff' }}>Loading Admin Panel...</div>}>
+          <AdminApp />
+        </Suspense>
+      } />
       <Route path="*" element={
         <>
           <div id="main-layout" style={{ display: 'flex', flexGrow: 1, width: '100%', overflow: 'hidden' }}>
