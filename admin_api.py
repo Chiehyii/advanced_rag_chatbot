@@ -79,16 +79,7 @@ def verify_admin(token: str = Depends(oauth2_scheme)):
     return username
 
 # --- Helper functions ---
-def get_db_connection():
-    """[SEC-3] 從共用連線池借用連線，避免每次請求都建立新連線。"""
-    if not config.DB_POOL:
-        raise HTTPException(status_code=503, detail="Database connection pool is not available.")
-    return config.DB_POOL.getconn()
-
-def release_db_connection(conn):
-    """[SEC-3] 將連線歸還連線池。必須在 finally 區塊中呼叫。"""
-    if conn and config.DB_POOL:
-        config.DB_POOL.putconn(conn)
+from db import get_db_cursor
 
 
 def emb_text(text: str):
@@ -286,95 +277,76 @@ def validate_scholarship_code(scholarship_code: str) -> str:
 @router.get("/scholarships")
 def list_scholarships(current_admin: str = Depends(verify_admin)):
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT scholarship_code, title, link, category, created_at, education_system, tags, identity, needs_review FROM scholarships ORDER BY created_at DESC;")
-        rows = cursor.fetchall()
-        
-        result = []
-        for row in rows:
-            result.append({
-                "scholarship_code": str(row[0]),
-                "title": row[1],
-                "link": row[2],
-                "category": row[3],
-                "created_at": str(row[4]),
-                "education_system": _parse_json_array(row[5]),
-                "tags": _parse_json_array(row[6]),
-                "identity": _parse_json_array(row[7]),
-                "needs_review": bool(row[8]) if row[8] is not None else False,
-            })
-        return {"status": "success", "data": result}
+        with get_db_cursor() as (conn, cursor):
+            cursor.execute("SELECT scholarship_code, title, link, category, created_at, education_system, tags, identity, needs_review FROM scholarships ORDER BY created_at DESC;")
+            rows = cursor.fetchall()
+            
+            result = []
+            for row in rows:
+                result.append({
+                    "scholarship_code": str(row[0]),
+                    "title": row[1],
+                    "link": row[2],
+                    "category": row[3],
+                    "created_at": str(row[4]),
+                    "education_system": _parse_json_array(row[5]),
+                    "tags": _parse_json_array(row[6]),
+                    "identity": _parse_json_array(row[7]),
+                    "needs_review": bool(row[8]) if row[8] is not None else False,
+                })
+            return {"status": "success", "data": result}
     except Exception as e:
         logger.error(f"[Admin API] Internal error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal Server Error")
-    finally:
-        if 'cursor' in locals() and cursor:
-            cursor.close()
-        if 'conn' in locals() and conn:
-            release_db_connection(conn)
 
 @router.get("/scholarships/{scholarship_code}")
 def get_scholarship(scholarship_code: str, current_admin: str = Depends(verify_admin)):
     scholarship_code = validate_scholarship_code(scholarship_code)  # [SEC-2]
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT scholarship_code, title, link, category, education_system, tags, identity, amount_summary, description, application_date_text, contact, markdown_content, needs_review, pending_data FROM scholarships WHERE scholarship_code = %s;", (scholarship_code,))
-        row = cursor.fetchone()
-        
-        if not row:
-            raise HTTPException(status_code=404, detail="Scholarship not found")
+        with get_db_cursor() as (conn, cursor):
+            cursor.execute("SELECT scholarship_code, title, link, category, education_system, tags, identity, amount_summary, description, application_date_text, contact, markdown_content, needs_review, pending_data FROM scholarships WHERE scholarship_code = %s;", (scholarship_code,))
+            row = cursor.fetchone()
             
-        data = {
-            "scholarship_code": str(row[0]),
-            "title": row[1],
-            "link": row[2],
-            "category": row[3],
-            "education_system": _parse_json_array(row[4]),
-            "tags": _parse_json_array(row[5]),
-            "identity": _parse_json_array(row[6]),
-            "amount_summary": row[7],
-            "description": row[8],
-            "application_date_text": row[9],
-            "contact": row[10],
-            "markdown_content": row[11],
-            "needs_review": bool(row[12]) if row[12] is not None else False,
-            "pending_data": row[13] if row[13] is not None else None,
-        }
-        return {"status": "success", "data": data}
+            if not row:
+                raise HTTPException(status_code=404, detail="Scholarship not found")
+                
+            data = {
+                "scholarship_code": str(row[0]),
+                "title": row[1],
+                "link": row[2],
+                "category": row[3],
+                "education_system": _parse_json_array(row[4]),
+                "tags": _parse_json_array(row[5]),
+                "identity": _parse_json_array(row[6]),
+                "amount_summary": row[7],
+                "description": row[8],
+                "application_date_text": row[9],
+                "contact": row[10],
+                "markdown_content": row[11],
+                "needs_review": bool(row[12]) if row[12] is not None else False,
+                "pending_data": row[13] if row[13] is not None else None,
+            }
+            return {"status": "success", "data": data}
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"[Admin API] Internal error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal Server Error")
-    finally:
-        if 'cursor' in locals() and cursor:
-            cursor.close()
-        if 'conn' in locals() and conn:
-            release_db_connection(conn)
 
 @router.patch("/scholarships/{scholarship_code}/discard_pending")
 def discard_pending(scholarship_code: str, current_admin: str = Depends(verify_admin)):
     """管理員捨棄 Scheduler 暫存的草稿，清除 pending_data 並取消待處理標記。"""
     scholarship_code = validate_scholarship_code(scholarship_code)  # [SEC-2]
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE scholarships SET needs_review = FALSE, pending_data = NULL WHERE scholarship_code = %s",
-            (scholarship_code,)
-        )
-        conn.commit()
+        with get_db_cursor(commit=True) as (conn, cursor):
+            cursor.execute(
+                "UPDATE scholarships SET needs_review = FALSE, pending_data = NULL WHERE scholarship_code = %s",
+                (scholarship_code,)
+            )
         return {"status": "success", "message": "Pending changes discarded"}
     except Exception as e:
         logger.error(f"[Admin API] Internal error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal Server Error")
-    finally:
-        if 'cursor' in locals() and cursor:
-            cursor.close()
-        if 'conn' in locals() and conn:
-            release_db_connection(conn)
 
 @router.post("/extract_info")
 def extract_scholarship_info(request: ExtractRequest, current_admin: str = Depends(verify_admin)):
@@ -441,9 +413,6 @@ def extract_scholarship_info(request: ExtractRequest, current_admin: str = Depen
 def save_scholarship(form: ScholarshipForm, current_admin: str = Depends(verify_admin)):
     # 1. Save to PostgreSQL
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
         new_hash, current_time = _get_hash_if_url(form.link)
         
         insert_query = """
@@ -468,23 +437,18 @@ def save_scholarship(form: ScholarshipForm, current_admin: str = Depends(verify_
             last_checked_at = EXCLUDED.last_checked_at;
         """
         
-        cursor.execute(insert_query, (
-            form.scholarship_code, form.title, form.link, form.category,
-            json.dumps(form.education_system, ensure_ascii=False),
-            json.dumps(form.tags, ensure_ascii=False),
-            json.dumps(form.identity, ensure_ascii=False),
-            form.amount_summary, form.description, form.application_date_text,
-            form.contact, form.markdown_content, new_hash, current_time
-        ))
-        conn.commit()
+        with get_db_cursor(commit=True) as (conn, cursor):
+            cursor.execute(insert_query, (
+                form.scholarship_code, form.title, form.link, form.category,
+                json.dumps(form.education_system, ensure_ascii=False),
+                json.dumps(form.tags, ensure_ascii=False),
+                json.dumps(form.identity, ensure_ascii=False),
+                form.amount_summary, form.description, form.application_date_text,
+                form.contact, form.markdown_content, new_hash, current_time
+            ))
     except Exception as e:
         logger.error(f"[Admin API] DB error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="DB Error")
-    finally:
-        if 'cursor' in locals() and cursor:
-            cursor.close()
-        if 'conn' in locals() and conn:
-            release_db_connection(conn)
 
     # 2. Insert vector chunks into Milvus
     try:
@@ -508,8 +472,6 @@ def update_scholarship(scholarship_code: str, form: ScholarshipForm, current_adm
 
     # 1. Update PostgreSQL (also clear pending review state)
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
         new_hash, current_time = _get_hash_if_url(form.link)
         update_query = """
         UPDATE scholarships SET
@@ -519,24 +481,19 @@ def update_scholarship(scholarship_code: str, form: ScholarshipForm, current_adm
             needs_review = FALSE, pending_data = NULL
         WHERE scholarship_code = %s;
         """
-        cursor.execute(update_query, (
-            form.title, form.link, form.category,
-            json.dumps(form.education_system, ensure_ascii=False),
-            json.dumps(form.tags, ensure_ascii=False),
-            json.dumps(form.identity, ensure_ascii=False),
-            form.amount_summary, form.description,
-            form.application_date_text, form.contact, form.markdown_content,
-            new_hash, current_time, scholarship_code
-        ))
-        conn.commit()
+        with get_db_cursor(commit=True) as (conn, cursor):
+            cursor.execute(update_query, (
+                form.title, form.link, form.category,
+                json.dumps(form.education_system, ensure_ascii=False),
+                json.dumps(form.tags, ensure_ascii=False),
+                json.dumps(form.identity, ensure_ascii=False),
+                form.amount_summary, form.description,
+                form.application_date_text, form.contact, form.markdown_content,
+                new_hash, current_time, scholarship_code
+            ))
     except Exception as e:
         logger.error(f"[Admin API] DB error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="DB Error")
-    finally:
-        if 'cursor' in locals() and cursor:
-            cursor.close()
-        if 'conn' in locals() and conn:
-            release_db_connection(conn)
 
     # 2. Re-Insert vector chunks into Milvus
     try:
@@ -581,19 +538,12 @@ def delete_scholarship(scholarship_code: str, current_admin: str = Depends(verif
 
     # 2. Milvus 刪除成功後，再刪 PostgreSQL
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM scholarships WHERE scholarship_code = %s", (scholarship_code,))
-        conn.commit()
+        with get_db_cursor(commit=True) as (conn, cursor):
+            cursor.execute("DELETE FROM scholarships WHERE scholarship_code = %s", (scholarship_code,))
         return {"status": "success", "message": "Successfully deleted from Knowledge Base and DB"}
     except Exception as e:
         logger.error(f"[Admin API] delete_scholarship DB error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="DB Error (vectors already removed)")
-    finally:
-        if 'cursor' in locals() and cursor:
-            cursor.close()
-        if 'conn' in locals() and conn:
-            release_db_connection(conn)
 
 
  
