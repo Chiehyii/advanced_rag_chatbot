@@ -4,6 +4,7 @@ from openai import AsyncOpenAI
 import config
 from prompts import PROMPTS
 from logger import get_logger
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 logger = get_logger(__name__)
 
@@ -30,33 +31,41 @@ def _trim_history_to_budget(history: list, budget: int = _HISTORY_TOKEN_BUDGET) 
         total_tokens += tokens
     return list(reversed(selected))
 
+def _translate_fallback(retry_state):
+    logger.warning(f"[Translate] Translation failed after {retry_state.attempt_number} attempts: {retry_state.outcome.exception()}. Using original query.")
+    return retry_state.args[0]
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=8), retry_error_callback=_translate_fallback)
 async def _translate_to_zh(text: str) -> str:
     """
     將問題翻譯成繁體中文，供 BM25 Sparse Search 與 Cross-Encoder 使用。
     當使用者以英文提問，但知識庫為中文時，此翻譯能大幅提升語意相似度。
     若翻譯失敗則 fallback 回原文。
     """
-    try:
-        response = await openai_client.chat.completions.create(
-            model=config.OPENAI_MODEL_NAME,
-            messages=[
-                {"role": "system", "content": (
-                    "You are a professional translator. "
-                    "Translate the user's text into Traditional Chinese (繁體中文). "
-                    "Output ONLY the translated text, no explanations."
-                )},
-                {"role": "user", "content": text}
-            ],
-            temperature=0.0,
-            max_tokens=300,
-        )
-        translated = response.choices[0].message.content.strip()
-        logger.info(f"[Translate] '{text}' → '{translated}'")
-        return translated
-    except Exception as e:
-        logger.warning(f"[Translate] Translation failed ({type(e).__name__}): {e}. Using original query.")
-        return text
+    response = await openai_client.chat.completions.create(
+        model=config.OPENAI_MODEL_NAME,
+        messages=[
+            {"role": "system", "content": (
+                "You are a professional translator. "
+                "Translate the user's text into Traditional Chinese (繁體中文). "
+                "Output ONLY the translated text, no explanations."
+            )},
+            {"role": "user", "content": text}
+        ],
+        temperature=0.0,
+        max_tokens=300,
+    )
+    translated = response.choices[0].message.content.strip()
+    logger.info(f"[Translate] '{text}' → '{translated}'")
+    return translated
 
+def _rephrase_fallback(retry_state):
+    logger.warning(f"[Rephrase] Failed to rephrase question after {retry_state.attempt_number} attempts: {retry_state.outcome.exception()}")
+    # arg[1] is `question` based on typical call layout, but safest is to get by name if passed as kwargs.
+    # To be safe, we fallback to the original question which is usually arg[1]
+    return retry_state.args[1] if len(retry_state.args) > 1 else retry_state.kwargs.get("question", "")
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=8), retry_error_callback=_rephrase_fallback)
 async def _rephrase_question_with_history(history: list, question: str, lang: str = 'zh') -> str:
     """
     使用對話歷史來重構一個新的、獨立的問題。
@@ -73,30 +82,30 @@ async def _rephrase_question_with_history(history: list, question: str, lang: st
     system_prompt = PROMPTS[lang]['rephrase_system']
     user_prompt = PROMPTS[lang]['rephrase_user'].format(history_str=history_str, question=question)
 
-    try:
-        response = await openai_client.chat.completions.create(
-            model=config.OPENAI_MODEL_NAME,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.0,
-            max_tokens=150,
-        )
-        rephrased_question = response.choices[0].message.content.strip()
-        if not rephrased_question:
-            return question
-        # 📝 INFO：記錄問題重構成功
-        logger.info(f"[Rephrase] Successfully rephrased question: {rephrased_question}")
-        return rephrased_question
-    except Exception as e:
-        # ⚠️ WARNING：問題重構失敗
-        logger.warning(f"[Rephrase] Failed to rephrase question: {e}", exc_info=True)
+    response = await openai_client.chat.completions.create(
+        model=config.OPENAI_MODEL_NAME,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=0.0,
+        max_tokens=150,
+    )
+    rephrased_question = response.choices[0].message.content.strip()
+    if not rephrased_question:
         return question
+    # 📝 INFO：記錄問題重構成功
+    logger.info(f"[Rephrase] Successfully rephrased question: {rephrased_question}")
+    return rephrased_question
 
 class SuggestedReplies(BaseModel):
     replies: list[str]
 
+def _suggested_replies_fallback(retry_state):
+    logger.warning(f"[Rephrase] Failed to predict follow-up questions after {retry_state.attempt_number} attempts: {retry_state.outcome.exception()}")
+    return []
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=8), retry_error_callback=_suggested_replies_fallback)
 async def generate_suggested_replies(question: str, context_text: str, lang: str = 'zh') -> list[str]:
     system_prompt = (
         "You are a helpful assistant predicting the user's next questions. Rules:\n"
@@ -115,18 +124,13 @@ async def generate_suggested_replies(question: str, context_text: str, lang: str
             "4. 建議詢問：該獎學金的應備文件、申請資格細節、或是截止日期。"
         )
     
-    try:
-        response = await openai_client.beta.chat.completions.parse(
-            model=config.OPENAI_MODEL_NAME,  # [OPT-2] 使用 config 而非硬編碼 "gpt-4o-mini"
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"User's incoming question: {question}\n\nReference Context:\n{context_text}"}
-            ],
-            response_format=SuggestedReplies,
-            temperature=0.7,
-        )
-        return response.choices[0].message.parsed.replies
-    except Exception as e:
-        # ⚠️ WARNING：根據使用者的問答預測產生的3個問題失敗了
-        logger.warning(f"[Rephrase] Failed to predict follow-up questions: {e}", exc_info=True)
-        return []
+    response = await openai_client.beta.chat.completions.parse(
+        model=config.OPENAI_MODEL_NAME,  # [OPT-2] 使用 config 而非硬編碼 "gpt-4o-mini"
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"User's incoming question: {question}\n\nReference Context:\n{context_text}"}
+        ],
+        response_format=SuggestedReplies,
+        temperature=0.7,
+    )
+    return response.choices[0].message.parsed.replies

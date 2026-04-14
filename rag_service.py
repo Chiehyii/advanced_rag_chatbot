@@ -6,6 +6,8 @@ import config
 from prompts import PROMPTS
 from scripts.query_analyzer import analyze_query
 from sentence_transformers import CrossEncoder
+from concurrent.futures import ThreadPoolExecutor
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 from logger import get_logger
 from llm_service import _translate_to_zh, _rephrase_question_with_history, generate_suggested_replies
@@ -21,6 +23,10 @@ MIN_RERANK_SCORE = 0.2  # Minimum Cross-Encoder score to keep a document
 # Note: First startup will download the model.
 cross_encoder = CrossEncoder('BAAI/bge-reranker-base', max_length=512)
 
+# --- CPU Thread Pool ---
+# 限制 CPU 密集的重排序模型推論最大並發數，防止系統高負載時崩潰
+cpu_executor = ThreadPoolExecutor(max_workers=2)
+
 # 使用集中化的設定來初始化 clients
 openai_client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
 milvus_client = MilvusClient(
@@ -28,6 +34,7 @@ milvus_client = MilvusClient(
     token=config.ZILLIZ_API_KEY,
 )
 
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=8), reraise=True)
 async def get_embedding(text):
     """產生文字向量"""
     resp = await openai_client.embeddings.create(
@@ -70,6 +77,7 @@ async def retrieve_context(question: str, expr: str, lang: str = 'zh', top_k: in
 
     reranker = RRFRanker()
 
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=8), reraise=True)
     def _milvus_hybrid_search():
         try:
             results = milvus_client.hybrid_search(
@@ -98,9 +106,12 @@ async def retrieve_context(question: str, expr: str, lang: str = 'zh', top_k: in
                 return results
             except Exception as fallback_err:
                 logger.error(f"[Search] Dense-only fallback also failed ({type(fallback_err).__name__}): {fallback_err}", exc_info=True)
-                return []
+                raise fallback_err
 
-    results = await asyncio.to_thread(_milvus_hybrid_search)
+    try:
+        results = await asyncio.to_thread(_milvus_hybrid_search)
+    except Exception:
+        results = []
 
     # --- Filter Fallback: 帶 filter 搜不到時，去掉 filter 重搜一次 ---
     if (not results or not results[0]) and expr:
@@ -121,6 +132,7 @@ async def retrieve_context(question: str, expr: str, lang: str = 'zh', top_k: in
             expr=""
         )
 
+        @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=8), reraise=True)
         def _retry_without_filter():
             try:
                 return milvus_client.hybrid_search(
@@ -133,13 +145,16 @@ async def retrieve_context(question: str, expr: str, lang: str = 'zh', top_k: in
                 )
             except Exception as e:
                 logger.error(f"[Filter] Retry without filter failed ({type(e).__name__}): {e}", exc_info=True)
-                return []
+                raise e
 
-        results = await asyncio.to_thread(_retry_without_filter)
-        if results and results[0]:
-            logger.info(f"[Filter] Retry without filter found {len(results[0])} results.")
-        else:
-            logger.error(f"[Filter] Retry without filter also returned 0 results.")
+        try:
+            results = await asyncio.to_thread(_retry_without_filter)
+            if results and results[0]:
+                logger.info(f"[Filter] Retry without filter found {len(results[0])} results.")
+            else:
+                logger.error(f"[Filter] Retry without filter also returned 0 results.")
+        except Exception:
+            results = []
 
     if not results or not results[0]:
         return []
@@ -160,7 +175,8 @@ async def retrieve_context(question: str, expr: str, lang: str = 'zh', top_k: in
     def _rank():
         return cross_encoder.predict(pairs)
         
-    scores = await asyncio.to_thread(_rank)
+    loop = asyncio.get_running_loop()
+    scores = await loop.run_in_executor(cpu_executor, _rank)
     
     for i, doc in enumerate(milvus_docs):
         doc["cross_encoder_score"] = float(scores[i])

@@ -36,6 +36,7 @@ pandas
 beautifulsoup4
 APScheduler
 slowapi
+tenacity
 
 # --- RAG evaluation ---
 ragas
