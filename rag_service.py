@@ -314,7 +314,7 @@ async def _handle_small_talk_branch(rephrased_question: str, lang: str, usage_da
     result_data = {"contexts": [], "chips": chips}
     yield {"type": "branch_done", "full_answer": full_answer, "contexts_for_logging": [], "result_data": result_data}
 
-async def stream_chat_pipeline(question: str, history: list | None = None, lang: str = 'zh', title_filter: list[str] | None = None):
+async def stream_chat_pipeline(question: str, history: list | None = None, lang: str = 'zh', title_filter: list[str] | None = None, request_id: str | None = None, session_id: str | None = None, user_id: str | None = None):
     """
     Orchestrates the entire RAG pipeline for streaming responses.
     """
@@ -395,7 +395,7 @@ async def stream_chat_pipeline(question: str, history: list | None = None, lang:
                 usage = usage_data.get("usage")
                 if usage:
                     logger.info(f"[Token Usage] prompt={usage.prompt_tokens}, completion={usage.completion_tokens}, total={usage.total_tokens}")
-                log_id = await asyncio.to_thread(log_to_db, original_question, rephrased_question, full_answer, contexts_for_logging, latency_ms, usage)
+                log_id = await asyncio.to_thread(log_to_db, original_question, rephrased_question, full_answer, contexts_for_logging, latency_ms, usage, request_id, session_id, user_id)
             except Exception as e:
                 logger.error(f"[DB] log_to_db failed in thread: {e}", exc_info=True)
                 log_id = None

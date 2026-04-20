@@ -1,5 +1,6 @@
 import os
 import sys
+import uuid
 import config
 from fastapi import FastAPI, HTTPException, Request
 import asyncio
@@ -15,7 +16,7 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from rag_service import stream_chat_pipeline
 import admin_api
 from scheduler import start_scheduler
-from logger import get_logger
+from logger import get_logger, request_id_var
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -52,6 +53,16 @@ app.add_middleware(
     allow_headers=["*"],  # Allows all headers
 )
 
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    """為每個 HTTP 請求自動產生 Request ID，寫入 contextvars 與 Response Header"""
+    rid = str(uuid.uuid4())[:8]  # 取前 8 碼即可，既短又足夠唯一
+    request.state.request_id = rid
+    request_id_var.set(rid)
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = rid
+    return response
+
 # --- Pydantic Models for Request and Response ---
 
 class ChatRequest(BaseModel):
@@ -64,6 +75,10 @@ class ChatRequest(BaseModel):
                                 description="Language code: 'zh' or 'en' only.")
     title_filter: List[str] | None = Field(None, max_length=3,
                                            description="Optional list of scholarship titles to narrow RAG search. Max 3.")
+    session_id: Optional[str] = Field(None, max_length=36,
+                                      description="Browser session ID for conversation tracking.")
+    user_id: Optional[str] = Field(None, max_length=36,
+                                   description="Anonymous browser user ID for user tracking.")
 
 class FeedbackRequest(BaseModel):
     """Request model for submitting feedback."""
@@ -82,10 +97,17 @@ async def chat_endpoint(request: Request, chat_request: ChatRequest):
     Receives a user query and conversation history, processes it through the RAG pipeline,
     and returns a streaming response of the generated answer.
     """
+    # 取出 Middleware 注入的 request_id，以及前端傳入的 session_id / user_id
+    rid = getattr(request.state, 'request_id', '-')
+    sid = chat_request.session_id
+    uid = chat_request.user_id
+    
     # 📝 INFO：記錄正常的請求進入
-    logger.info(f"[Chat] Received new chat stream request")
+    logger.info(f"[Chat] Received new chat stream request (session={sid}, user={uid})")
     
     async def event_generator():
+        # 在 async generator 中重新設定 contextvars，確保串流期間的 log 也帶上 request_id
+        request_id_var.set(rid)
         try:
             
             # 📝 INFO：記錄使用者的提問與語言
@@ -102,7 +124,7 @@ async def chat_endpoint(request: Request, chat_request: ChatRequest):
             # ---------------------------------------------------------------------------------
 
             # The pipeline now yields events (content chunks or final data)
-            async for event in stream_chat_pipeline(chat_request.query, chat_request.history or [], chat_request.lang, title_filter=chat_request.title_filter):
+            async for event in stream_chat_pipeline(chat_request.query, chat_request.history or [], chat_request.lang, title_filter=chat_request.title_filter, request_id=rid, session_id=sid, user_id=uid):
                 event_type = event.get("type")
                 data = event.get("data")
 

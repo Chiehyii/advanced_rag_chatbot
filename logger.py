@@ -2,9 +2,20 @@
 import logging
 import sys 
 import os
+from contextvars import ContextVar
 
 # 引入處理「依照時間切割檔案」的工具
 from logging.handlers import TimedRotatingFileHandler
+
+# --- Request ID Context Variable ---
+# 透過 contextvars，同一條 async 請求鏈中的所有 log 都能自動帶上相同的 request_id
+request_id_var: ContextVar[str] = ContextVar('request_id', default='-')
+
+class RequestIdFilter(logging.Filter):
+    """自動將 contextvars 中的 request_id 注入每一條 log record"""
+    def filter(self, record):
+        record.request_id = request_id_var.get('-')
+        return True
 
 def get_logger(name: str):
     """
@@ -17,14 +28,18 @@ def get_logger(name: str):
         # 設定層級
         # 預設只印出 INFO 以上等級的訊息
         logger.setLevel(logging.INFO)
-        # 設定專業的日誌格式: 時間 - 模組名稱 - 等級 - 訊息
+        # 設定專業的日誌格式: 時間 - 模組名稱 - 等級 - [Request ID] - 訊息
         formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - [%(levelname)s] - %(message)s'
+            '%(asctime)s - %(name)s - [%(levelname)s] - [%(request_id)s] - %(message)s'
         )
+
+        # 加入 Request ID Filter
+        req_filter = RequestIdFilter()
 
         # 1. 設定輸出到終端機 (Console)
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setFormatter(formatter)
+        console_handler.addFilter(req_filter)
         logger.addHandler(console_handler)
 
         # 2. 設定輸出到檔案 (File), 每天自動切換新檔案, 存在logs資料夾
@@ -46,6 +61,7 @@ def get_logger(name: str):
         # 設定檔案名稱加上日期後綴, exp: adv_rag_chatbot.2026-03-19
         file_handler.suffix = "%Y-%m-%d"
         file_handler.setFormatter(formatter)
+        file_handler.addFilter(req_filter)
         # 將 handler 加入 logger
         logger.addHandler(file_handler)
 

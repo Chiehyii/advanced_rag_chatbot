@@ -10,6 +10,18 @@ import './index.css';
 
 const AdminApp = React.lazy(() => import('./admin/AdminApp').then(module => ({ default: module.AdminApp })));
 const CHAT_STORAGE_KEY = 'tcu_scholarship_chat_history';
+const SESSION_ID_KEY = 'tcu_session_id';
+const USER_ID_KEY = 'tcu_user_id';
+
+/** 從指定的 Storage 中取得或產生一個新的 UUID */
+function getOrCreateId(storage: Storage, key: string): string {
+  let id = storage.getItem(key);
+  if (!id) {
+    id = crypto.randomUUID();
+    storage.setItem(key, id);
+  }
+  return id;
+}
 // --- i18n Dictionaries ---
 export const translations = {
   zh: {
@@ -114,6 +126,9 @@ function App() {
   });
   const [language, setLanguage] = useState<Language>('zh');
   const [isLoading, setIsLoading] = useState(false);
+  // --- 追蹤 ID ---
+  const sessionId = useRef(getOrCreateId(sessionStorage, SESSION_ID_KEY)).current;
+  const userId = useRef(getOrCreateId(localStorage, USER_ID_KEY)).current;
   // [PERF-4] RAF handle 用於批次更新串流內容，避免每個 token 就觸發一次 re-render
   const rafRef = useRef<number | null>(null);
   const fullAnswerRef = useRef<string>(''); // 持綌最新的 fullAnswer，供 RAF closure 使用
@@ -165,6 +180,8 @@ function App() {
           history,
           lang: language,
           title_filter: selectedTags.length > 0 ? selectedTags.map(t => t.title) : null,
+          session_id: sessionId,
+          user_id: userId,
         })
       });
       if (!response.ok) {

@@ -36,7 +36,7 @@ def clean_retrieved_contexts(retrieved_docs: list):
         })
     return cleaned_contexts
 
-def log_to_db(question, rephrased_question, answer, contexts, latency_ms, usage):
+def log_to_db(question, rephrased_question, answer, contexts, latency_ms, usage, request_id=None, session_id=None, user_id=None):
     """將問答資料和 token 使用量記錄到 PostgreSQL 資料庫中"""
     try:
         prompt_tokens = usage.prompt_tokens if usage else None
@@ -44,11 +44,12 @@ def log_to_db(question, rephrased_question, answer, contexts, latency_ms, usage)
         total_tokens = usage.total_tokens if usage else None
 
         insert_query = f"""INSERT INTO {config.DB_TABLE_NAME} 
-                         (question, rephrased_question, answer, retrieved_contexts, latency_ms, prompt_tokens, completion_tokens, total_tokens)
-                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id;"""
+                         (request_id, session_id, user_id, question, rephrased_question, answer, retrieved_contexts, latency_ms, prompt_tokens, completion_tokens, total_tokens)
+                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id;"""
         
         with get_db_cursor(commit=True) as (conn, cursor):
             cursor.execute(insert_query, (
+                request_id, session_id, user_id,
                 question, rephrased_question, answer, 
                 json.dumps(contexts, ensure_ascii=False), 
                 latency_ms, prompt_tokens, completion_tokens, total_tokens
