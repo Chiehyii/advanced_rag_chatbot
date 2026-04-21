@@ -12,6 +12,7 @@ const AdminApp = React.lazy(() => import('./admin/AdminApp').then(module => ({ d
 const CHAT_STORAGE_KEY = 'tcu_scholarship_chat_history';
 const SESSION_ID_KEY = 'tcu_session_id';
 const USER_ID_KEY = 'tcu_user_id';
+const API_BASE_URL = import.meta.env.VITE_API_URL || '';
 
 /** 從指定的 Storage 中取得或產生一個新的 UUID */
 function getOrCreateId(storage: Storage, key: string): string {
@@ -170,7 +171,7 @@ function App() {
     // Add empty placeholder for bot streaming
     setMessages(prev => [...prev, { role: 'assistant', content: '', isStreaming: true }]);
     try {
-      const response = await fetch('/chat', {
+      const response = await fetch(`${API_BASE_URL}/chat`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -310,7 +311,7 @@ function App() {
   };
   const handleFeedback = async (logId: string, type: 'like' | 'dislike' | null) => {
     // Send feedback to backend
-    await fetch('/feedback', {
+    await fetch(`${API_BASE_URL}/feedback`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ log_id: logId, feedback_type: type })
@@ -322,7 +323,7 @@ function App() {
   };
   const handleFeedbackSubmit = async (feedbackText: string) => {
     if (!currentFeedbackLogId) return;
-    await fetch('/feedback', {
+    await fetch(`${API_BASE_URL}/feedback`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

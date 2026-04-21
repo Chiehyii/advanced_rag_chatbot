@@ -1,15 +1,17 @@
 import { Scholarship } from './types';
+const API_BASE_URL = import.meta.env.VITE_API_URL || '';
 const getToken = (): string => localStorage.getItem('admin_jwt') || '';
 export async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
     const headers = new Headers(options.headers);
     headers.set('Authorization', `Bearer ${getToken()}`);
-    return fetch(url, { ...options, headers });
+    const fullUrl = url.startsWith('/') ? `${API_BASE_URL}${url}` : url;
+    return fetch(fullUrl, { ...options, headers });
 }
 export async function apiLogin(username: string, password: string): Promise<string> {
     const formData = new URLSearchParams();
     formData.append('username', username);
     formData.append('password', password);
-    const res = await fetch('/api/login', {
+    const res = await fetch(`${API_BASE_URL}/api/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: formData,
@@ -78,6 +80,6 @@ export async function apiDiscardPending(code: string): Promise<void> {
     if (!res.ok) throw new Error(result.detail || 'Discard Error');
 }
 export async function apiGetMetadataSchema() {
-    const res = await fetch('/metadata_schema.json');
+    const res = await fetch(`${API_BASE_URL}/metadata_schema.json`);
     return res.json();
 }

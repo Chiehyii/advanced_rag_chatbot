@@ -18,6 +18,7 @@ interface ScholarshipFilterModalProps {
 }
 
 const MAX_TAGS = 3;
+const API_BASE_URL = import.meta.env.VITE_API_URL || '';
 
 export const ScholarshipFilterModal: React.FC<ScholarshipFilterModalProps> = ({
   isOpen,
@@ -49,8 +50,8 @@ export const ScholarshipFilterModal: React.FC<ScholarshipFilterModalProps> = ({
       setLoading(true);
       try {
         const [schRes, schemaRes] = await Promise.all([
-          fetch('/scholarships/filter'),
-          fetch('/metadata_schema.json'),
+          fetch(`${API_BASE_URL}/scholarships/filter`),
+          fetch(`${API_BASE_URL}/metadata_schema.json`),
         ]);
         const schData = await schRes.json();
         const schemaData = await schemaRes.json();

@@ -262,5 +262,4 @@ def get_metadata_schema():
         with open(schema_path, "r", encoding="utf-8") as f:
             return json.load(f)
     raise HTTPException(status_code=404, detail="Schema not found")
-
-app.mount("/", StaticFiles(directory="frontend-react/dist", html=True), name="frontend-react")
+# app.mount("/", StaticFiles(directory="frontend-react/dist", html=True), name="frontend-react")
