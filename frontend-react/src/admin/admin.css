@@ -803,8 +803,15 @@ textarea {
 }
 
 @keyframes pulse-amber {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.5); }
-    50%       { box-shadow: 0 0 0 5px rgba(245, 158, 11, 0); }
+
+    0%,
+    100% {
+        box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.5);
+    }
+
+    50% {
+        box-shadow: 0 0 0 5px rgba(245, 158, 11, 0);
+    }
 }
 
 /* 待處理清單項目左邊框 */
@@ -856,8 +863,14 @@ textarea {
         background: rgba(245, 158, 11, 0.1);
         border-color: rgba(245, 158, 11, 0.3);
     }
-    .pending-review-banner strong { color: #fcd34d; }
-    .pending-review-banner p { color: #fbbf24; }
+
+    .pending-review-banner strong {
+        color: #fcd34d;
+    }
+
+    .pending-review-banner p {
+        color: #fbbf24;
+    }
 }
 
 /* ── 返回按鈕 ── */
@@ -884,4 +897,4 @@ textarea {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-}
+}

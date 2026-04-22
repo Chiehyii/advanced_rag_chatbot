@@ -1,13 +1,28 @@
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, Suspense } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { ChatHeader } from './components/ChatHeader';
 import { MessageList } from './components/MessageList';
 import { ChatInput } from './components/ChatInput';
 import { FeedbackModal } from './components/FeedbackModal';
-import { Message, Language } from './types';
-import { AdminApp } from './admin/AdminApp';
+import { ScholarshipFilterModal } from './components/ScholarshipFilterModal';
+import { Message, Language, ScholarshipTag } from './types';
 import './index.css';
+
+const AdminApp = React.lazy(() => import('./admin/AdminApp').then(module => ({ default: module.AdminApp })));
 const CHAT_STORAGE_KEY = 'tcu_scholarship_chat_history';
+const SESSION_ID_KEY = 'tcu_session_id';
+const USER_ID_KEY = 'tcu_user_id';
+const API_BASE_URL = import.meta.env.VITE_API_URL || '';
+
+/** 從指定的 Storage 中取得或產生一個新的 UUID */
+function getOrCreateId(storage: Storage, key: string): string {
+  let id = storage.getItem(key);
+  if (!id) {
+    id = crypto.randomUUID();
+    storage.setItem(key, id);
+  }
+  return id;
+}
 // --- i18n Dictionaries ---
 export const translations = {
   zh: {
@@ -25,7 +40,7 @@ export const translations = {
     initial_bot_message: "你好！我是慈濟大學獎助學金問答助理，請問有什麼可以幫助您的嗎？",
     error_message: "抱歉，連線時發生錯誤，請稍後再試。",
     example_question_1: "提供給五專生原住民的獎助學金有哪些?",
-    example_question_2: "校內的工讀甚麼時候開放申請?",
+    example_question_2: "申請校內工讀需要具備甚麼條件?",
     example_question_3: "家庭意外補助",
     example_question_4: "低收入可以申請甚麼?",
     example_question_5: "大三下要到海外交流和志工服務, 學校有提供甚麼補助嗎?",
@@ -33,7 +48,7 @@ export const translations = {
     example_question_7: "就學貸款辦理資訊",
     example_question_8: "碩士班外籍生可以申請獎助學金嗎？",
     example_question_9: "學術論文發表有甚麼補助?",
-    example_question_10: "參加校外競賽可申請的獎學金",
+    example_question_10: "校外競賽獎勵",
     example_question_11: "大學部原住民可以申請甚麼獎助學金?",
     example_question_12: "弱勢助學",
     reference_title: "來源：",
@@ -43,7 +58,17 @@ export const translations = {
     help_button_title: "Get Help",
     help_alert: "聯絡資訊\n\n電話: (03) 856-5301 ext.00000\n郵箱: example@gms.tcu.edu.tw",
     show_more: "顯示全部",
-    show_less: "收起"
+    show_less: "收起",
+    filter_title: "獎學金篩選",
+    filter_category: "類別",
+    filter_tags: "條件",
+    filter_all: "全部",
+    filter_results: "篩選結果",
+    filter_results_unit: "筆",
+    filter_max_hint: "已達上限 3 個",
+    filter_loading: "載入中...",
+    filter_empty: "沒有符合的結果",
+    filter_remove_tag: "移除"
   },
   en: {
     welcome_title: "Hello! What would you like to know about scholarships?",
@@ -60,14 +85,14 @@ export const translations = {
     initial_bot_message: "Hello! I am the Tzu Chi University Scholarship Q&A Assistant. How can I help you?",
     error_message: "Sorry, an error occurred while connecting. Please try again later.",
     example_question_1: "What scholarships are available for aboriginal students in the five-year junior college program?",
-    example_question_2: "When can I apply for on-campus work-study jobs?",
+    example_question_2: "What are the eligibility requirements for TCU work-study?",
     example_question_3: "Family accident subsidy",
-    example_question_4: "What can I apply for with a low-income status?",
+    example_question_4: "What subsidies can low-income households apply for?",
     example_question_5: "I am going on an overseas exchange and volunteer service in the second semester of my junior year. Does the school offer any subsidies?",
-    example_question_6: "Does the school offer any certification or license incentives or subsidies?",
+    example_question_6: "Does the school offer certification or license incentives?",
     example_question_7: "Student loan application information",
     example_question_8: "Can international students in master's programs apply for scholarships?",
-    example_question_9: "What subsidies are available for publishing academic papers?",
+    example_question_9: "What subsidies are available for academic research?",
     example_question_10: "Scholarships for participating in external competitions",
     example_question_11: "What scholarships are available for aboriginal students in the undergraduate level?",
     example_question_12: "Grants for Disadvantaged Students",
@@ -78,7 +103,17 @@ export const translations = {
     help_button_title: "Get Help",
     help_alert: "Contact Information\n\nPhone: (03) 856-5301 ext.00000\nEmail: example@gms.tcu.edu.tw",
     show_more: "Show all",
-    show_less: "Show less"
+    show_less: "Show less",
+    filter_title: "Scholarship Filter",
+    filter_category: "Category",
+    filter_tags: "Category",
+    filter_all: "All",
+    filter_results: "Results",
+    filter_results_unit: "items",
+    filter_max_hint: "Max 3 reached",
+    filter_loading: "Loading...",
+    filter_empty: "No matching results",
+    filter_remove_tag: "Remove"
   }
 };
 function App() {
@@ -92,12 +127,18 @@ function App() {
   });
   const [language, setLanguage] = useState<Language>('zh');
   const [isLoading, setIsLoading] = useState(false);
+  // --- 追蹤 ID ---
+  const sessionId = useRef(getOrCreateId(sessionStorage, SESSION_ID_KEY)).current;
+  const userId = useRef(getOrCreateId(localStorage, USER_ID_KEY)).current;
   // [PERF-4] RAF handle 用於批次更新串流內容，避免每個 token 就觸發一次 re-render
   const rafRef = useRef<number | null>(null);
   const fullAnswerRef = useRef<string>(''); // 持綌最新的 fullAnswer，供 RAF closure 使用
   // Feedback state
   const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
   const [currentFeedbackLogId, setCurrentFeedbackLogId] = useState<string | null>(null);
+  // Scholarship filter & tag state
+  const [selectedTags, setSelectedTags] = useState<ScholarshipTag[]>([]);
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
   // Persist messages to sessionStorage whenever they change
   useEffect(() => {
     // Only save completed (non-streaming) messages
@@ -130,12 +171,19 @@ function App() {
     // Add empty placeholder for bot streaming
     setMessages(prev => [...prev, { role: 'assistant', content: '', isStreaming: true }]);
     try {
-      const response = await fetch('/chat', {
+      const response = await fetch(`${API_BASE_URL}/chat`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ query: text, history, lang: language })
+        body: JSON.stringify({
+          query: text,
+          history,
+          lang: language,
+          title_filter: selectedTags.length > 0 ? selectedTags.map(t => t.title) : null,
+          session_id: sessionId,
+          user_id: userId,
+        })
       });
       if (!response.ok) {
         throw new Error('Network response was not ok');
@@ -244,15 +292,26 @@ function App() {
   };
   const handleClearChat = () => {
     setMessages([]);
+    setSelectedTags([]);  // Clear tags when clearing chat
     try {
       sessionStorage.removeItem(CHAT_STORAGE_KEY);
     } catch (e) {
       console.warn('Failed to clear chat history from sessionStorage:', e);
     }
   };
+  const handleAddTag = (tag: ScholarshipTag) => {
+    setSelectedTags(prev => {
+      if (prev.length >= 3) return prev;
+      if (prev.some(t => t.scholarship_code === tag.scholarship_code)) return prev;
+      return [...prev, tag];
+    });
+  };
+  const handleRemoveTag = (scholarshipCode: string) => {
+    setSelectedTags(prev => prev.filter(t => t.scholarship_code !== scholarshipCode));
+  };
   const handleFeedback = async (logId: string, type: 'like' | 'dislike' | null) => {
     // Send feedback to backend
-    await fetch('/feedback', {
+    await fetch(`${API_BASE_URL}/feedback`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ log_id: logId, feedback_type: type })
@@ -264,7 +323,7 @@ function App() {
   };
   const handleFeedbackSubmit = async (feedbackText: string) => {
     if (!currentFeedbackLogId) return;
-    await fetch('/feedback', {
+    await fetch(`${API_BASE_URL}/feedback`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -280,7 +339,11 @@ function App() {
   const t = translations[language];
   return (
     <Routes>
-      <Route path="/admin/*" element={<AdminApp />} />
+      <Route path="/admin/*" element={
+        <Suspense fallback={<div style={{ padding: '20px', textAlign: 'center', color: '#fff' }}>Loading Admin Panel...</div>}>
+          <AdminApp />
+        </Suspense>
+      } />
       <Route path="*" element={
         <>
           <div id="main-layout" style={{ display: 'flex', flexGrow: 1, width: '100%', overflow: 'hidden' }}>
@@ -296,6 +359,9 @@ function App() {
                     onHelp={() => window.open('https://oia.tcu.edu.tw', '_blank')}
                     language={language}
                     isInitial={true}
+                    selectedTags={selectedTags}
+                    onRemoveTag={handleRemoveTag}
+                    onOpenFilter={() => setIsFilterOpen(true)}
                   />
                   <div className="example-questions-container initial-chips">
                     {[
@@ -332,6 +398,9 @@ function App() {
                     onClearChat={handleClearChat}
                     onHelp={() => window.open('https://oia.tcu.edu.tw', '_blank')}
                     language={language}
+                    selectedTags={selectedTags}
+                    onRemoveTag={handleRemoveTag}
+                    onOpenFilter={() => setIsFilterOpen(true)}
                   />
                 </>
               )}
@@ -341,6 +410,13 @@ function App() {
             isOpen={isFeedbackOpen}
             onClose={() => setIsFeedbackOpen(false)}
             onSubmit={handleFeedbackSubmit}
+            language={language}
+          />
+          <ScholarshipFilterModal
+            isOpen={isFilterOpen}
+            onClose={() => setIsFilterOpen(false)}
+            onSelectScholarship={handleAddTag}
+            selectedTags={selectedTags}
             language={language}
           />
         </>

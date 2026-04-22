@@ -15,3 +15,15 @@ export interface Message {
 }
 
 export type Language = 'zh' | 'en';
+
+export interface ScholarshipTag {
+  title: string;
+  scholarship_code: string;
+}
+
+export interface ScholarshipListItem {
+  title: string;
+  scholarship_code: string;
+  category: string;
+  tags: string[];
+}

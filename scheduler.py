@@ -11,7 +11,8 @@ from apscheduler.triggers.interval import IntervalTrigger
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed  # 雖然不再用於 scraping，保留備用
 import config
-from admin_api import get_db_connection, release_db_connection, openai_client, init_milvus_collection, emb_texts_batch  # [CODE-2]
+from admin_api import openai_client, init_milvus_collection, emb_texts_batch  # [CODE-2]
+from db import get_db_cursor
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from utils import is_safe_url
 from logger import get_logger
@@ -100,7 +101,7 @@ def ask_ai_to_extract(url: str, content: str) -> dict:
 
 def process_scholarship_update(row, new_hash, new_text):
     """
-    [REVIEW MODE] 偵測到內容變更後，不再自動更新 DB 與 Milvus。
+    [REVIEW MODE] 偵測到內容變更後，不自動更新 DB 與 Milvus。
     改為將 AI 萃取結果暫存至 pending_data，並設 needs_review=True，
     等待管理員手動審核後才正式儲存。
     """
@@ -110,7 +111,7 @@ def process_scholarship_update(row, new_hash, new_text):
     extracted_data = ask_ai_to_extract(url, new_text)
     if not extracted_data:
         logger.warning(f"[Scheduler] AI extraction returned empty for {title}, skipping.")
-        return
+        return False
 
     extracted_data['link'] = url
     extracted_data['scholarship_code'] = scholarship_code
@@ -124,112 +125,107 @@ def process_scholarship_update(row, new_hash, new_text):
             extracted_data[field] = str(val) if val is not None else ""
 
     # 只寫入 pending_data 和 needs_review，不動主欄位和 Milvus
-    conn = get_db_connection()
     try:
-        cursor = conn.cursor()
         now = datetime.now(timezone.utc)
-        cursor.execute(
-            """
-            UPDATE scholarships
-            SET pending_data = %s, needs_review = TRUE, last_checked_at = %s
-            WHERE scholarship_code = %s
-            """,
-            (json.dumps(extracted_data, ensure_ascii=False), now.isoformat(), scholarship_code)
-        )
-        conn.commit()
-        logger.info(f"[Scheduler] pending_data saved for '{title}', awaiting admin review.")
-        try:
-            send_line_message(
-                f"🔔 [系統通知] 偵測到獎學金內容變更\n"
-                f"名稱: {title}\n網址: {url}\n"
-                f"AI 已完成萃取，請至後台審核並手動儲存。"
+        with get_db_cursor(commit=True) as (conn, cursor):
+            cursor.execute(
+                """
+                UPDATE scholarships
+                SET pending_data = %s, needs_review = TRUE, last_checked_at = %s
+                WHERE scholarship_code = %s
+                """,
+                (json.dumps(extracted_data, ensure_ascii=False), now.isoformat(), scholarship_code)
             )
-        except Exception:
-            pass
+        logger.info(f"[Scheduler] pending_data saved for '{title}', awaiting admin review.")
+        return True
     except Exception as e:
         logger.error(f"[Scheduler] Failed to save pending_data for {title}: {e}", exc_info=True)
         try:
             send_line_message(f"❌ [系統通知] 暫存草稿失敗\n名稱: {title}\n錯誤: {e}")
         except Exception:
             pass
-    finally:
-        release_db_connection(conn)
+        return False
 
 
 def run_inspection():
     logger.info(f"\n[Scheduler] Running scholarship inspection at {datetime.now().isoformat()}")
-    conn = get_db_connection()
     try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT scholarship_code, title, link, content_hash FROM scholarships WHERE link IS NOT NULL AND link != '';")
-        rows = cursor.fetchall()
+        with get_db_cursor() as (conn, cursor):
+            cursor.execute("SELECT scholarship_code, title, link, content_hash FROM scholarships WHERE link IS NOT NULL AND link != '';")
+            rows = cursor.fetchall()
     except Exception as e:
         logger.error(f"[Scheduler] Inspection failed to fetch rows: {e}", exc_info=True)
-        release_db_connection(conn)
         return
-    finally:
-        if 'cursor' in locals() and cursor:
-            cursor.close()
 
     if not rows:
-        release_db_connection(conn)
         return
 
-    try:
-        # [PERF-3] 並行爬取所有網址，全面升級為徹底非阻塞的 aiohttp
-        # 相比於 ThreadPool，效能跳躍性提升、佔用資源極少。
-        logger.info(f"[Scheduler] Scraping {len(rows)} URLs concurrently using aiohttp...")
-        
-        # 使用 asyncio.run 啟動異步驅動
-        scraped_results = asyncio.run(_async_run_inspection(rows))
+    # [PERF-3] 並行爬取所有網址，全面升級為徹底非阻塞的 aiohttp
+    # 相比於 ThreadPool，效能跳躍性提升、佔用資源極少。
+    logger.info(f"[Scheduler] Scraping {len(rows)} URLs concurrently using aiohttp...")
+    
+    # 使用 asyncio.run 啟動異步驅動
+    scraped_results = asyncio.run(_async_run_inspection(rows))
 
-        # 爬取完成後，依序處理有變化的項目
-        changed_count = 0
-        for row, latest_text in scraped_results:
-            scholarship_code, title, url, old_hash = row
-            if not latest_text:
-                continue
-                
-            new_hash = compute_md5(latest_text)
+    # 爬取完成後，依序處理有變化的項目
+    changed_items = []
+    for row, latest_text in scraped_results:
+        scholarship_code, title, url, old_hash = row
+        if not latest_text:
+            continue
             
-            if old_hash != new_hash:
-                print(f"[Scheduler] Content change detected for {title} ({url})")
-                changed_count += 1
-                process_scholarship_update(row, new_hash, latest_text)
-            else:
-                try:
-                    update_conn = get_db_connection()
-                    c2 = update_conn.cursor()
+        new_hash = compute_md5(latest_text)
+        
+        if old_hash != new_hash:
+            print(f"[Scheduler] Content change detected for {title} ({url})")
+            success = process_scholarship_update(row, new_hash, latest_text)
+            if success:
+                changed_items.append((title, url))
+        else:
+            try:
+                with get_db_cursor(commit=True) as (update_conn, c2):
                     now = datetime.now(timezone.utc)
                     c2.execute("UPDATE scholarships SET last_checked_at = %s WHERE scholarship_code = %s", (now.isoformat(), scholarship_code))
-                    update_conn.commit()
-                    c2.close()
-                    release_db_connection(update_conn)
-                except Exception as e:
-                    logger.warning(f"Failed to update last_checked for {title}: {e}")
-        
-        logger.info(f"[Scheduler] Inspection complete. {changed_count}/{len(scraped_results)} changed.")
-        
-        # [NEW] 不論有無變動，自檢完成後都發送一個總結通知
-        try:
+            except Exception as e:
+                logger.warning(f"Failed to update last_checked for {title}: {e}")
+    
+    logger.info(f"[Scheduler] Inspection complete. {len(changed_items)}/{len(scraped_results)} changed successfully.")
+    
+    # [NEW] 不論有無變動，自檢完成後都發送一個總結通知
+    try:
+        if changed_items:
+            # 限制列出的變更項目數量，避免 Line 訊息過長
+            max_display = 15
+            display_items = changed_items[:max_display]
+            details = "\n".join([f"🔹 {t}" for t, u in display_items])
+            if len(changed_items) > max_display:
+                details += f"\n...及其他 {len(changed_items) - max_display} 項"
+                
             summary_msg = (
                 f"📊 [系統自動檢測完成]\n"
                 f"檢查時間：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
                 f"本次檢查項目：{len(rows)} 筆\n"
-                f"偵測到變動：{changed_count} 筆\n"
-                f"狀態：自檢程序已順利執行完畢。"
+                f"偵測到變動並待審核：{len(changed_items)} 筆\n\n"
+                f"【變更清單】\n{details}\n\n"
+                f"💡 AI 已完成萃取，請至管理後台審核並手動儲存。"
             )
-            send_line_message(summary_msg)
-        except Exception as e:
-            logger.warning(f"Failed to send summary notification: {e}")
-    finally:
-        release_db_connection(conn)
+        else:
+            summary_msg = (
+                f"📊 [系統自動檢測完成]\n"
+                f"檢查時間：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"本次檢查項目：{len(rows)} 筆\n"
+                f"偵測到變動：0 筆\n"
+                f"狀態：自檢程序已順利執行完畢，無任何變更。"
+            )
+        send_line_message(summary_msg)
+    except Exception as e:
+        logger.warning(f"Failed to send summary notification: {e}")
 
 
 def start_scheduler():
     scheduler = BackgroundScheduler()
-    # Run every 12 hours
-    scheduler.add_job(run_inspection, IntervalTrigger(minutes=720), id='scholarship_inspection')
+    # Run every 24 hours
+    scheduler.add_job(run_inspection, IntervalTrigger(hours=24), id='scholarship_inspection')
     scheduler.start()
     logger.info("[Scheduler] Started background automated inspection.")
 

@@ -36,9 +36,11 @@ pandas
 beautifulsoup4
 APScheduler
 slowapi
+tenacity
 
-# --- RAG evaluation ---
+# --- RAG evaluation & Testing ---
 ragas
+pytest
 
 # --- Optional but recommended ---
 sentence-transformers  # embedding 常用，如 all-MiniLM

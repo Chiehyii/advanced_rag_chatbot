@@ -40,6 +40,9 @@ def create_database_and_table():
         CREATE TABLE IF NOT EXISTS {table} (
             id SERIAL PRIMARY KEY,
             timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            request_id VARCHAR(36),
+            session_id VARCHAR(36),
+            user_id VARCHAR(36),
             question TEXT NOT NULL,
             rephrased_question TEXT,
             answer TEXT,
@@ -58,6 +61,15 @@ def create_database_and_table():
 
         # Execute the SQL statement
         cursor.execute(create_table_query)
+
+        # --- Migration: 為已存在的資料表安全新增欄位 ---
+        migration_queries = [
+            sql.SQL("ALTER TABLE {table} ADD COLUMN IF NOT EXISTS request_id VARCHAR(36);").format(table=sql.Identifier(TABLE_NAME)),
+            sql.SQL("ALTER TABLE {table} ADD COLUMN IF NOT EXISTS session_id VARCHAR(36);").format(table=sql.Identifier(TABLE_NAME)),
+            sql.SQL("ALTER TABLE {table} ADD COLUMN IF NOT EXISTS user_id VARCHAR(36);").format(table=sql.Identifier(TABLE_NAME)),
+        ]
+        for mq in migration_queries:
+            cursor.execute(mq)
 
         # Create scholarships table
         create_scholarships_table_query = sql.SQL("""

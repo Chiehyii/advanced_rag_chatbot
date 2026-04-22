@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send } from 'lucide-react';
-import { Language } from '../types';
+import { Send, Plus, X } from 'lucide-react';
+import { Language, ScholarshipTag } from '../types';
 import { translations } from '../App';
 
 interface ChatInputProps {
@@ -10,9 +10,15 @@ interface ChatInputProps {
   isLoading: boolean;
   language: Language;
   isInitial?: boolean;
+  selectedTags: ScholarshipTag[];
+  onRemoveTag: (scholarshipCode: string) => void;
+  onOpenFilter: () => void;
 }
 
-export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onClearChat, onHelp, isLoading, language, isInitial }) => {
+export const ChatInput: React.FC<ChatInputProps> = ({
+  onSendMessage, onClearChat, onHelp, isLoading, language, isInitial,
+  selectedTags, onRemoveTag, onOpenFilter,
+}) => {
   const [input, setInput] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const t = translations[language];
@@ -50,6 +56,24 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onClearChat
     <div id="input-area" className={isInitial ? 'initial' : ''}>
       <form id="input-form" onSubmit={handleSubmit}>
         <div className="input-wrapper">
+          {/* Tag Row — inside the input wrapper, above textarea */}
+          {selectedTags.length > 0 && (
+            <div className="scholarship-tags-row">
+              {selectedTags.map((tag) => (
+                <span key={tag.scholarship_code} className="scholarship-tag">
+                  <span className="scholarship-tag-text">{tag.title}</span>
+                  <button
+                    type="button"
+                    className="scholarship-tag-remove"
+                    onClick={() => onRemoveTag(tag.scholarship_code)}
+                    title={t.filter_remove_tag || '移除'}
+                  >
+                    <X size={12} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
           <textarea
             ref={textareaRef}
             id="user-input"
@@ -60,6 +84,16 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onClearChat
             disabled={isLoading}
           />
           <div className="input-bottom-row">
+            {/* (+) Filter Button — left side */}
+            <button
+              type="button"
+              className="filter-trigger-btn"
+              onClick={onOpenFilter}
+              title={t.filter_title || '獎學金篩選'}
+              disabled={isLoading}
+            >
+              <Plus size={18} />
+            </button>
             {/* [OPT-3] 字元計數器：接近或超出上限時提示使用者 */}
             {input.length > 800 && (
               <span style={{

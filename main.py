@@ -1,5 +1,6 @@
 import os
 import sys
+import uuid
 import config
 from fastapi import FastAPI, HTTPException, Request
 import asyncio
@@ -12,10 +13,10 @@ import psycopg2
 import traceback
 import json
 from fastapi.responses import StreamingResponse, JSONResponse
-from answer import stream_chat_pipeline
+from rag_service import stream_chat_pipeline
 import admin_api
 from scheduler import start_scheduler
-from logger import get_logger
+from logger import get_logger, request_id_var
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -52,6 +53,16 @@ app.add_middleware(
     allow_headers=["*"],  # Allows all headers
 )
 
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    """為每個 HTTP 請求自動產生 Request ID，寫入 contextvars 與 Response Header"""
+    rid = str(uuid.uuid4())[:8]  # 取前 8 碼即可，既短又足夠唯一
+    request.state.request_id = rid
+    request_id_var.set(rid)
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = rid
+    return response
+
 # --- Pydantic Models for Request and Response ---
 
 class ChatRequest(BaseModel):
@@ -62,6 +73,12 @@ class ChatRequest(BaseModel):
                                        description="Chat history. Max 20 messages.")
     lang: Optional[str] = Field('zh', pattern='^(zh|en)$',
                                 description="Language code: 'zh' or 'en' only.")
+    title_filter: List[str] | None = Field(None, max_length=3,
+                                           description="Optional list of scholarship titles to narrow RAG search. Max 3.")
+    session_id: Optional[str] = Field(None, max_length=36,
+                                      description="Browser session ID for conversation tracking.")
+    user_id: Optional[str] = Field(None, max_length=36,
+                                   description="Anonymous browser user ID for user tracking.")
 
 class FeedbackRequest(BaseModel):
     """Request model for submitting feedback."""
@@ -80,10 +97,17 @@ async def chat_endpoint(request: Request, chat_request: ChatRequest):
     Receives a user query and conversation history, processes it through the RAG pipeline,
     and returns a streaming response of the generated answer.
     """
+    # 取出 Middleware 注入的 request_id，以及前端傳入的 session_id / user_id
+    rid = getattr(request.state, 'request_id', '-')
+    sid = chat_request.session_id
+    uid = chat_request.user_id
+    
     # 📝 INFO：記錄正常的請求進入
-    logger.info(f"[Chat] Received new chat stream request")
+    logger.info(f"[Chat] Received new chat stream request (session={sid}, user={uid})")
     
     async def event_generator():
+        # 在 async generator 中重新設定 contextvars，確保串流期間的 log 也帶上 request_id
+        request_id_var.set(rid)
         try:
             
             # 📝 INFO：記錄使用者的提問與語言
@@ -100,7 +124,7 @@ async def chat_endpoint(request: Request, chat_request: ChatRequest):
             # ---------------------------------------------------------------------------------
 
             # The pipeline now yields events (content chunks or final data)
-            async for event in stream_chat_pipeline(chat_request.query, chat_request.history or [], chat_request.lang):
+            async for event in stream_chat_pipeline(chat_request.query, chat_request.history or [], chat_request.lang, title_filter=chat_request.title_filter, request_id=rid, session_id=sid, user_id=uid):
                 event_type = event.get("type")
                 data = event.get("data")
 
@@ -176,6 +200,60 @@ async def feedback_endpoint(request: Request, feedback_request: FeedbackRequest)
     logger.info(f"[Feedback] Successfully updated feedback for log_id: {feedback_request.log_id}")
     return {"status": "success", "message": "Feedback recorded."}
 
+# --- Public Scholarship Filter API ---
+@app.get("/scholarships/filter")
+@limiter.limit("20/minute")
+async def filter_scholarships(request: Request):
+    """
+    公開端點：回傳獎學金清單（僅包含 title + metadata），供前端篩選 Modal 使用。
+    不需要管理員認證，但有速率限制。
+    """
+    def _query_scholarships():
+        if not config.DB_POOL:
+            return []
+        conn = config.DB_POOL.getconn()
+        cursor = None
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT scholarship_code, title, category, tags "
+                "FROM scholarships ORDER BY title;"
+            )
+            rows = cursor.fetchall()
+            result = []
+            for row in rows:
+                cat = row[2]
+                tags_val = row[3]
+                # Parse JSON arrays safely
+                def _safe_parse(v):
+                    if not v:
+                        return []
+                    if isinstance(v, list):
+                        return v
+                    try:
+                        parsed = json.loads(v)
+                        return parsed if isinstance(parsed, list) else []
+                    except (json.JSONDecodeError, TypeError):
+                        return []
+                result.append({
+                    "scholarship_code": str(row[0]),
+                    "title": row[1],
+                    "category": cat or "",
+                    "tags": _safe_parse(tags_val),
+                })
+            return result
+        except Exception as e:
+            logger.error(f"[Filter API] Failed to query scholarships: {e}", exc_info=True)
+            return []
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                config.DB_POOL.putconn(conn)
+
+    data = await asyncio.to_thread(_query_scholarships)
+    return {"status": "success", "data": data}
+
 # --- Static Files and Schemas ---
 @app.get("/metadata_schema.json")
 def get_metadata_schema():
@@ -184,5 +262,4 @@ def get_metadata_schema():
         with open(schema_path, "r", encoding="utf-8") as f:
             return json.load(f)
     raise HTTPException(status_code=404, detail="Schema not found")
-
-app.mount("/", StaticFiles(directory="frontend-react/dist", html=True), name="frontend-react")
+# app.mount("/", StaticFiles(directory="frontend-react/dist", html=True), name="frontend-react")
