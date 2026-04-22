@@ -101,7 +101,7 @@ def ask_ai_to_extract(url: str, content: str) -> dict:
 
 def process_scholarship_update(row, new_hash, new_text):
     """
-    [REVIEW MODE] 偵測到內容變更後，不再自動更新 DB 與 Milvus。
+    [REVIEW MODE] 偵測到內容變更後，不自動更新 DB 與 Milvus。
     改為將 AI 萃取結果暫存至 pending_data，並設 needs_review=True，
     等待管理員手動審核後才正式儲存。
     """
@@ -111,7 +111,7 @@ def process_scholarship_update(row, new_hash, new_text):
     extracted_data = ask_ai_to_extract(url, new_text)
     if not extracted_data:
         logger.warning(f"[Scheduler] AI extraction returned empty for {title}, skipping.")
-        return
+        return False
 
     extracted_data['link'] = url
     extracted_data['scholarship_code'] = scholarship_code
@@ -137,20 +137,14 @@ def process_scholarship_update(row, new_hash, new_text):
                 (json.dumps(extracted_data, ensure_ascii=False), now.isoformat(), scholarship_code)
             )
         logger.info(f"[Scheduler] pending_data saved for '{title}', awaiting admin review.")
-        try:
-            send_line_message(
-                f"🔔 [系統通知] 偵測到獎學金內容變更\n"
-                f"名稱: {title}\n網址: {url}\n"
-                f"AI 已完成萃取，請至後台審核並手動儲存。"
-            )
-        except Exception:
-            pass
+        return True
     except Exception as e:
         logger.error(f"[Scheduler] Failed to save pending_data for {title}: {e}", exc_info=True)
         try:
             send_line_message(f"❌ [系統通知] 暫存草稿失敗\n名稱: {title}\n錯誤: {e}")
         except Exception:
             pass
+        return False
 
 
 def run_inspection():
@@ -174,7 +168,7 @@ def run_inspection():
     scraped_results = asyncio.run(_async_run_inspection(rows))
 
     # 爬取完成後，依序處理有變化的項目
-    changed_count = 0
+    changed_items = []
     for row, latest_text in scraped_results:
         scholarship_code, title, url, old_hash = row
         if not latest_text:
@@ -184,8 +178,9 @@ def run_inspection():
         
         if old_hash != new_hash:
             print(f"[Scheduler] Content change detected for {title} ({url})")
-            changed_count += 1
-            process_scholarship_update(row, new_hash, latest_text)
+            success = process_scholarship_update(row, new_hash, latest_text)
+            if success:
+                changed_items.append((title, url))
         else:
             try:
                 with get_db_cursor(commit=True) as (update_conn, c2):
@@ -194,17 +189,34 @@ def run_inspection():
             except Exception as e:
                 logger.warning(f"Failed to update last_checked for {title}: {e}")
     
-    logger.info(f"[Scheduler] Inspection complete. {changed_count}/{len(scraped_results)} changed.")
+    logger.info(f"[Scheduler] Inspection complete. {len(changed_items)}/{len(scraped_results)} changed successfully.")
     
     # [NEW] 不論有無變動，自檢完成後都發送一個總結通知
     try:
-        summary_msg = (
-            f"📊 [系統自動檢測完成]\n"
-            f"檢查時間：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-            f"本次檢查項目：{len(rows)} 筆\n"
-            f"偵測到變動：{changed_count} 筆\n"
-            f"狀態：自檢程序已順利執行完畢。"
-        )
+        if changed_items:
+            # 限制列出的變更項目數量，避免 Line 訊息過長
+            max_display = 15
+            display_items = changed_items[:max_display]
+            details = "\n".join([f"🔹 {t}" for t, u in display_items])
+            if len(changed_items) > max_display:
+                details += f"\n...及其他 {len(changed_items) - max_display} 項"
+                
+            summary_msg = (
+                f"📊 [系統自動檢測完成]\n"
+                f"檢查時間：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"本次檢查項目：{len(rows)} 筆\n"
+                f"偵測到變動並待審核：{len(changed_items)} 筆\n\n"
+                f"【變更清單】\n{details}\n\n"
+                f"💡 AI 已完成萃取，請至管理後台審核並手動儲存。"
+            )
+        else:
+            summary_msg = (
+                f"📊 [系統自動檢測完成]\n"
+                f"檢查時間：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"本次檢查項目：{len(rows)} 筆\n"
+                f"偵測到變動：0 筆\n"
+                f"狀態：自檢程序已順利執行完畢，無任何變更。"
+            )
         send_line_message(summary_msg)
     except Exception as e:
         logger.warning(f"Failed to send summary notification: {e}")
@@ -212,8 +224,8 @@ def run_inspection():
 
 def start_scheduler():
     scheduler = BackgroundScheduler()
-    # Run every 12 hours
-    scheduler.add_job(run_inspection, IntervalTrigger(minutes=720), id='scholarship_inspection')
+    # Run every 24 hours
+    scheduler.add_job(run_inspection, IntervalTrigger(hours=24), id='scholarship_inspection')
     scheduler.start()
     logger.info("[Scheduler] Started background automated inspection.")
 
