@@ -3,14 +3,14 @@ fastapi
 uvicorn
 
 # --- Frontend ---
-streamlit
+#streamlit
 
 # --- OpenAI + LangChain ---
 openai
-langchain
-langchain-community
-langchain-core
-langchain-openai
+# langchain
+# langchain-community
+# langchain-core
+# langchain-openai
 langchain-text-splitters
 
 # --- Vector DBs ---
@@ -18,34 +18,36 @@ pymilvus
 psycopg2-binary     # PGVector 用
 
 # --- Embeddings / NLP / Transformers ---
-transformers
-huggingface-hub
-tokenizers
+# transformers
+# huggingface-hub
+# tokenizers
+sentence-transformers
 tiktoken
 
 # --- CKIP Transformers ---
-ckip-transformers
+#ckip-transformers
 
 # --- Data / Utils / Web ---
 pydantic
 python-dotenv
 requests
 aiohttp
-numpy
-pandas
+# numpy
+# pandas
 beautifulsoup4
 APScheduler
 slowapi
 tenacity
 
 # --- RAG evaluation & Testing ---
-ragas
+# ragas
 pytest
 
 # --- Optional but recommended ---
-sentence-transformers  # embedding 常用，如 all-MiniLM
+  # embedding 常用，如 all-MiniLM
 
 # --- Database / ML ---
-psycopg2-binary
-sentence-transformers
-torch
+# torch
+bcrypt
+PyJWT
+python-multipart
