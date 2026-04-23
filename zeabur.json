@@ -1,0 +1,10 @@
+{
+  "name": "scholarship-chatbot-api",
+  "build": {
+    "type": "python",
+    "buildCommand": "pip install -r requirements.txt"
+  },
+  "start": {
+    "command": "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}"
+  }
+}
