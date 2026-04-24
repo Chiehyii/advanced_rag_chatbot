@@ -5,8 +5,6 @@ import { translations } from '../App';
 
 interface ChatInputProps {
   onSendMessage: (text: string) => void;
-  onClearChat: () => void;
-  onHelp: () => void;
   isLoading: boolean;
   language: Language;
   isInitial?: boolean;
@@ -16,7 +14,7 @@ interface ChatInputProps {
 }
 
 export const ChatInput: React.FC<ChatInputProps> = ({
-  onSendMessage, onClearChat, onHelp, isLoading, language, isInitial,
+  onSendMessage, isLoading, language, isInitial,
   selectedTags, onRemoveTag, onOpenFilter,
 }) => {
   const [input, setInput] = useState('');
@@ -27,9 +25,13 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
   useEffect(() => {
     if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-      // Max height set to 150px
-      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 150)}px`;
+      if (input === '') {
+        textareaRef.current.style.removeProperty('height');
+      } else {
+        textareaRef.current.style.height = 'auto';
+        // Max height set to 150px
+        textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 150)}px`;
+      }
     }
   }, [input]);
 
@@ -111,17 +113,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           </div>
         </div>
         <div className="chat-notice">{t.chat_notice}</div>
-        <div className="utility-buttons">
-          <button type="button" id="clear-button" title={t.clear_chat_button_title || t.clear_chat_button} onClick={onClearChat}>
-            {t.clear_chat_button}
-          </button>
-          <button type="button" id="help-button" title={t.help_button_title || t.help_button} onClick={() => {
-            alert(t.help_alert);
-            onHelp();
-          }}>
-            {t.help_button}
-          </button>
-        </div>
       </form>
     </div>
   );

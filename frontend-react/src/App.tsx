@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef, Suspense } from 'react';
 import { Routes, Route } from 'react-router-dom';
-import { ChatHeader } from './components/ChatHeader';
 import { MessageList } from './components/MessageList';
 import { ChatInput } from './components/ChatInput';
 import { FeedbackModal } from './components/FeedbackModal';
 import { ScholarshipFilterModal } from './components/ScholarshipFilterModal';
+import { DesktopSidebar } from './components/DesktopSidebar';
+import { Trash2 } from 'lucide-react';
 import { Message, Language, ScholarshipTag } from './types';
 import './index.css';
 
@@ -53,10 +54,11 @@ export const translations = {
     example_question_12: "弱勢助學",
     reference_title: "來源：",
     unknown_source: "未知來源",
-    chat_notice: "慈濟大學獎助學金問答可能會出錯，請查證回覆內容。",
+    chat_notice: "AI回答可能會出錯，請查證回覆內容。",
     clear_chat_button_title: "Clear Chat",
-    help_button_title: "Get Help",
-    help_alert: "聯絡資訊\n\n電話: (03) 856-5301 ext.00000\n郵箱: example@gms.tcu.edu.tw",
+    help_button_title: "Help",
+    help_alert: "系統問題請聯絡: \n\n校務研究中心 資料庫組\n電話: (03)856-5301 ext.11148\n信箱: chiehyi@gms.tcu.edu.tw",
+    homepage_button: "首頁",
     show_more: "顯示全部",
     show_less: "收起",
     filter_title: "獎學金篩選",
@@ -71,7 +73,7 @@ export const translations = {
     filter_remove_tag: "移除"
   },
   en: {
-    welcome_title: "Hello! What would you like to know about scholarships?",
+    welcome_title: "Hi! Ask me about scholarships!",
     title: "Scholarship Chat",
     input_placeholder: "Please enter your question here...",
     send_button_title: "Send",
@@ -98,10 +100,11 @@ export const translations = {
     example_question_12: "Grants for Disadvantaged Students",
     reference_title: "References:",
     unknown_source: "Unknown source",
-    chat_notice: "TCU Scholarship Chat may produce errors, please verify the responses.",
+    chat_notice: "AI chat may produce errors, please verify the responses.",
     clear_chat_button_title: "Clear Chat",
-    help_button_title: "Get Help",
-    help_alert: "Contact Information\n\nPhone: (03) 856-5301 ext.00000\nEmail: example@gms.tcu.edu.tw",
+    help_button_title: "Help",
+    help_alert: "For system issues, please contact:\n\nInstitutional Research Office, Database Division\nTel: (03)856-5301 ext.11148\nEmail: chiehyi@gms.tcu.edu.tw",
+    homepage_button: "Homepage",
     show_more: "Show all",
     show_less: "Show less",
     filter_title: "Scholarship Filter",
@@ -346,17 +349,30 @@ function App() {
       } />
       <Route path="*" element={
         <>
-          <div id="main-layout" style={{ display: 'flex', flexGrow: 1, width: '100%', overflow: 'hidden' }}>
-            <div id="chat-side" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, width: '100%', position: 'relative' }}>
-              <ChatHeader language={language} onLanguageChange={setLanguage} />
+          <div id="main-layout" style={{ display: 'flex', height: '100%', width: '100%', overflow: 'hidden' }}>
+            <DesktopSidebar
+              language={language}
+              onLanguageChange={setLanguage}
+              onHelp={() => alert(t.help_alert)}
+            />
+            <div id="chat-side" style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, height: '100%', overflow: 'hidden' }}>
+              {/* Minimal top bar — only trash icon */}
+              <div className="top-action-bar">
+                <button
+                  type="button"
+                  className="header-icon-btn clear-chat-btn"
+                  onClick={handleClearChat}
+                  title={t.clear_chat_button_title || t.clear_chat_button}
+                >
+                  <Trash2 size={20} strokeWidth={1.5} />
+                </button>
+              </div>
               {isInitialState ? (
                 <div className="hero-container">
                   <div className="hero-title">{t.welcome_title}</div>
                   <ChatInput
                     isLoading={isLoading}
                     onSendMessage={handleSendMessage}
-                    onClearChat={handleClearChat}
-                    onHelp={() => window.open('https://oia.tcu.edu.tw', '_blank')}
                     language={language}
                     isInitial={true}
                     selectedTags={selectedTags}
@@ -369,14 +385,14 @@ function App() {
                       t.example_question_2,
                       t.example_question_3,
                       t.example_question_4,
-                      t.example_question_5,
-                      t.example_question_6,
+                      // t.example_question_5,
+                      // t.example_question_6,
                       t.example_question_7,
                       t.example_question_8,
-                      t.example_question_9,
-                      t.example_question_10,
-                      t.example_question_11,
-                      t.example_question_12
+                      // t.example_question_9,
+                      // t.example_question_10,
+                      // t.example_question_11,
+                      // t.example_question_12
                     ].map((q, idx) => (
                       <div key={idx} className="example-question" onClick={() => handleSendMessage(q)}>
                         {q}
@@ -395,8 +411,6 @@ function App() {
                   <ChatInput
                     isLoading={isLoading}
                     onSendMessage={handleSendMessage}
-                    onClearChat={handleClearChat}
-                    onHelp={() => window.open('https://oia.tcu.edu.tw', '_blank')}
                     language={language}
                     selectedTags={selectedTags}
                     onRemoveTag={handleRemoveTag}
