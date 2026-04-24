@@ -27,9 +27,13 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
   useEffect(() => {
     if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-      // Max height set to 150px
-      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 150)}px`;
+      if (input === '') {
+        textareaRef.current.style.removeProperty('height');
+      } else {
+        textareaRef.current.style.height = 'auto';
+        // Max height set to 150px
+        textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 150)}px`;
+      }
     }
   }, [input]);
 
