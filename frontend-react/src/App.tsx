@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, Suspense } from 'react';
 import { Routes, Route } from 'react-router-dom';
-import { ChatHeader } from './components/ChatHeader';
 import { MessageList } from './components/MessageList';
 import { ChatInput } from './components/ChatInput';
 import { FeedbackModal } from './components/FeedbackModal';
@@ -374,8 +373,6 @@ function App() {
                   <ChatInput
                     isLoading={isLoading}
                     onSendMessage={handleSendMessage}
-                    onClearChat={handleClearChat}
-                    onHelp={() => window.open('https://oia.tcu.edu.tw', '_blank')}
                     language={language}
                     isInitial={true}
                     selectedTags={selectedTags}
@@ -414,8 +411,6 @@ function App() {
                   <ChatInput
                     isLoading={isLoading}
                     onSendMessage={handleSendMessage}
-                    onClearChat={handleClearChat}
-                    onHelp={() => window.open('https://oia.tcu.edu.tw', '_blank')}
                     language={language}
                     selectedTags={selectedTags}
                     onRemoveTag={handleRemoveTag}

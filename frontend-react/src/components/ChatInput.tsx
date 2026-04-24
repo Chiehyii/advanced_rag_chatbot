@@ -5,8 +5,6 @@ import { translations } from '../App';
 
 interface ChatInputProps {
   onSendMessage: (text: string) => void;
-  onClearChat: () => void;
-  onHelp: () => void;
   isLoading: boolean;
   language: Language;
   isInitial?: boolean;
@@ -16,7 +14,7 @@ interface ChatInputProps {
 }
 
 export const ChatInput: React.FC<ChatInputProps> = ({
-  onSendMessage, onClearChat, onHelp, isLoading, language, isInitial,
+  onSendMessage, isLoading, language, isInitial,
   selectedTags, onRemoveTag, onOpenFilter,
 }) => {
   const [input, setInput] = useState('');
