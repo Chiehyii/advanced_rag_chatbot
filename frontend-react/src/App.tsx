@@ -5,6 +5,8 @@ import { MessageList } from './components/MessageList';
 import { ChatInput } from './components/ChatInput';
 import { FeedbackModal } from './components/FeedbackModal';
 import { ScholarshipFilterModal } from './components/ScholarshipFilterModal';
+import { DesktopSidebar } from './components/DesktopSidebar';
+import { Trash2 } from 'lucide-react';
 import { Message, Language, ScholarshipTag } from './types';
 import './index.css';
 
@@ -346,9 +348,24 @@ function App() {
       } />
       <Route path="*" element={
         <>
-          <div id="main-layout" style={{ display: 'flex', flexGrow: 1, width: '100%', overflow: 'hidden' }}>
-            <div id="chat-side" style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, width: '100%', position: 'relative' }}>
-              <ChatHeader language={language} onLanguageChange={setLanguage} />
+          <div id="main-layout" style={{ display: 'flex', height: '100%', width: '100%', overflow: 'hidden' }}>
+            <DesktopSidebar
+              language={language}
+              onLanguageChange={setLanguage}
+              onHelp={() => window.open('https://oia.tcu.edu.tw', '_blank')}
+            />
+            <div id="chat-side" style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, height: '100%', overflow: 'hidden' }}>
+              {/* Minimal top bar — only trash icon */}
+              <div className="top-action-bar">
+                <button
+                  type="button"
+                  className="header-icon-btn clear-chat-btn"
+                  onClick={handleClearChat}
+                  title={t.clear_chat_button_title || t.clear_chat_button}
+                >
+                  <Trash2 size={20} strokeWidth={1.5} />
+                </button>
+              </div>
               {isInitialState ? (
                 <div className="hero-container">
                   <div className="hero-title">{t.welcome_title}</div>
