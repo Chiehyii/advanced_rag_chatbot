@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Globe, HelpCircle, ChevronRight, Menu, X } from 'lucide-react';
+import { Globe, HelpCircle, ChevronRight, Menu, X, ExternalLink } from 'lucide-react';
 import { Language } from '../types';
 import { translations } from '../App';
 
@@ -24,6 +24,17 @@ const SidebarContent: React.FC<DesktopSidebarProps & { onClose?: () => void }> =
       </div>
 
       <nav className="sidebar-nav">
+        {/* Source Link */}
+        <button
+          type="button"
+          className="sidebar-nav-item"
+          onClick={() => { window.open('https://yizhu.tcu.edu.tw/', '_blank'); if (onClose) onClose(); }}
+          title={(t as any).homepage_button || '首頁'}
+        >
+          <ExternalLink size={20} strokeWidth={1.5} />
+          <span className="sidebar-nav-label">{(t as any).homepage_button || '首頁'}</span>
+        </button>
+
         {/* Language switcher */}
         <div className="sidebar-nav-item-wrap">
           <button

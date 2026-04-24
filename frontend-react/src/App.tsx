@@ -57,8 +57,9 @@ export const translations = {
     unknown_source: "未知來源",
     chat_notice: "AI回答可能會出錯，請查證回覆內容。",
     clear_chat_button_title: "Clear Chat",
-    help_button_title: "Get Help",
-    help_alert: "聯絡資訊\n\n電話: (03) 856-5301 ext.00000\n郵箱: example@gms.tcu.edu.tw",
+    help_button_title: "Help",
+    help_alert: "系統問題請聯絡: \n\n校務研究中心 資料庫組\n電話: (03)856-5301 ext.11148\n信箱: chiehyi@gms.tcu.edu.tw",
+    homepage_button: "首頁",
     show_more: "顯示全部",
     show_less: "收起",
     filter_title: "獎學金篩選",
@@ -102,8 +103,9 @@ export const translations = {
     unknown_source: "Unknown source",
     chat_notice: "AI chat may produce errors, please verify the responses.",
     clear_chat_button_title: "Clear Chat",
-    help_button_title: "Get Help",
-    help_alert: "Contact Information\n\nPhone: (03) 856-5301 ext.00000\nEmail: example@gms.tcu.edu.tw",
+    help_button_title: "Help",
+    help_alert: "For system issues, please contact:\n\nInstitutional Research Office, Database Division\nTel: (03)856-5301 ext.11148\nEmail: chiehyi@gms.tcu.edu.tw",
+    homepage_button: "Homepage",
     show_more: "Show all",
     show_less: "Show less",
     filter_title: "Scholarship Filter",
@@ -352,7 +354,7 @@ function App() {
             <DesktopSidebar
               language={language}
               onLanguageChange={setLanguage}
-              onHelp={() => window.open('https://oia.tcu.edu.tw', '_blank')}
+              onHelp={() => alert(t.help_alert)}
             />
             <div id="chat-side" style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, height: '100%', overflow: 'hidden' }}>
               {/* Minimal top bar — only trash icon */}
