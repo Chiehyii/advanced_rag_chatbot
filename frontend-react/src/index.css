@@ -80,7 +80,6 @@ body {
   min-height: 100%;
   padding: 0 15px 20px 15px;
   box-sizing: border-box;
-  overflow-x: hidden;
 }
 
 /* Minimal top action bar — trash icon only */
@@ -498,7 +497,6 @@ body {
   flex-grow: 1;
   padding: 25px 20px 20px 20px;
   overflow-y: visible;
-  overflow-x: hidden;
   /* to allow sticky context */
   display: flex;
   flex-direction: column;
@@ -550,7 +548,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  /* No max-width: contexts column handles the space */
+  max-width: calc(100% - 360px);
 }
 
 .avatar {
@@ -1080,7 +1078,6 @@ body {
 #feedback-textarea {
   width: 95%;
   height: 100px;
-  margin: 10px;
   padding: 10px;
   border: 1px solid var(--border-color);
   border-radius: 4px;
@@ -1168,7 +1165,7 @@ body {
 
   #input-area {
     padding: 0;
-    border-top: 1px solid var(--border-color);
+
   }
 
   #input-form {
