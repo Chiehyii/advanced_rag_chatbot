@@ -73,7 +73,7 @@ export const translations = {
     filter_remove_tag: "移除"
   },
   en: {
-    welcome_title: "Hello! What would you like to know about scholarships?",
+    welcome_title: "Hi! Ask me about scholarships!",
     title: "Scholarship Chat",
     input_placeholder: "Please enter your question here...",
     send_button_title: "Send",
@@ -386,14 +386,14 @@ function App() {
                       t.example_question_2,
                       t.example_question_3,
                       t.example_question_4,
-                      t.example_question_5,
-                      t.example_question_6,
+                      // t.example_question_5,
+                      // t.example_question_6,
                       t.example_question_7,
                       t.example_question_8,
-                      t.example_question_9,
-                      t.example_question_10,
-                      t.example_question_11,
-                      t.example_question_12
+                      // t.example_question_9,
+                      // t.example_question_10,
+                      // t.example_question_11,
+                      // t.example_question_12
                     ].map((q, idx) => (
                       <div key={idx} className="example-question" onClick={() => handleSendMessage(q)}>
                         {q}

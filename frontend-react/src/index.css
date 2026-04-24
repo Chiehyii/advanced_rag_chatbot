@@ -766,7 +766,7 @@ body {
   gap: 20px;
   height: 100%;
   width: 100%;
-  padding: 20px;
+  padding: 20px 20px 80px 20px;
   box-sizing: border-box;
   animation: fadeIn 0.8s ease-out forwards;
 }
@@ -849,7 +849,6 @@ body {
 }
 
 .input-wrapper:focus-within {
-  border-color: #b3b3b3;
   box-shadow: 0 2px 14px rgba(0, 0, 0, 0.10);
 }
 
