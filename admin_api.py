@@ -1,8 +1,6 @@
-import os
 import re
 import uuid
 import json
-import random
 import requests
 from bs4 import BeautifulSoup
 from typing import List, Optional
@@ -11,16 +9,17 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from pydantic import BaseModel
-import psycopg2
 from openai import OpenAI
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from pymilvus import MilvusClient, DataType, Function, FunctionType
 import config
 import hashlib
 from datetime import datetime, timedelta, timezone
 import jwt
 from utils import is_safe_url
 from logger import get_logger
+from prompts import PROMPTS
+from milvus_service import init_milvus_collection, _insert_chunks_to_milvus
+from scraper_service import _get_hash_if_url
+from db import get_db_cursor
 
 logger = get_logger(__name__)
 
@@ -53,13 +52,13 @@ class ScholarshipForm(BaseModel):
 import bcrypt
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/login")
 
-def create_access_token(data: dict, expires_delta: timedelta | None = None):
+def create_access_token(data: dict, expires_delta: timedelta | None = None, token_type: str = "access"):
     to_encode = data.copy()
     if expires_delta:
         expire = datetime.now(timezone.utc) + expires_delta
     else:
         expire = datetime.now(timezone.utc) + timedelta(minutes=15)
-    to_encode.update({"exp": expire})
+    to_encode.update({"exp": expire, "type": token_type})
     encoded_jwt = jwt.encode(to_encode, config.JWT_SECRET_KEY, algorithm=config.ALGORITHM)
     return encoded_jwt
 
@@ -72,145 +71,12 @@ def verify_admin(token: str = Depends(oauth2_scheme)):
     try:
         payload = jwt.decode(token, config.JWT_SECRET_KEY, algorithms=[config.ALGORITHM])
         username: str = payload.get("sub")
-        if username is None or username != config.ADMIN_USERNAME:
+        token_type: str = payload.get("type", "access")
+        if username is None or username != config.ADMIN_USERNAME or token_type != "access":
             raise credentials_exception
     except jwt.InvalidTokenError:
         raise credentials_exception
     return username
-
-# --- Helper functions ---
-from db import get_db_cursor
-
-
-def emb_text(text: str):
-    return (
-        openai_client.embeddings.create(input=text, model=config.EMBEDDING_MODEL)
-        .data[0]
-        .embedding
-    )
-
-def emb_texts_batch(texts: list[str]) -> list[list[float]]:
-    """[PERF-1] 批次嵌入：一次 API 呼叫取得所有 chunk 的向量，大幅減少等待時間。"""
-    if not texts:
-        return []
-    response = openai_client.embeddings.create(input=texts, model=config.EMBEDDING_MODEL)
-    return [item.embedding for item in response.data]
-
-def _insert_chunks_to_milvus(
-    milvus_client,
-    collection_name: str,
-    markdown_content: str,
-    title: str,
-    scholarship_code: str,
-    link: str,
-    identity: list,
-    education_system: list,
-    category: str,
-    tags: list,
-) -> int:
-    """
-    [CODE-1] 抽取的共用函式——切分、批次嵌入、寫入 Milvus。
-    save 和 update 都呼叫這鄿，不再重複相同的逻輯。
-    回傳實際插入的 chunk 數量。
-    """
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-    chunks = [c.strip() for c in text_splitter.split_text(markdown_content) if c.strip()]
-    if not chunks:
-        return 0
-
-    # [PERF-1] 批次嵌入
-    vectors = emb_texts_batch(chunks)
-
-    data_to_insert = []
-    for chunk, vector in zip(chunks, vectors):
-        data_to_insert.append({
-            # [CODE-2] 使用 UUID 確保唯一性，取代有潜在碰撞風險的 random.randint
-            "id": uuid.uuid4().int >> 65, # 右移 65 位確保結果 ≤ 2^63-1（Milvus INT64 上限）但如果數據預計會超過 1,000 萬筆 id可能會有重複的風險，建議使用 uuid.uuid4().int >> 64並重建milvus collection id 欄位= varchar
-            "text": chunk,
-            "source_file": title + ".md",
-            "source_path": scholarship_code,
-            "source_url": link or "",
-            "identity": identity,
-            "education_system": education_system,
-            "category": [category] if category else [],
-            "tags": tags,
-            "vector": vector
-        })
-
-    if data_to_insert:
-        milvus_client.insert(collection_name=collection_name, data=data_to_insert)
-        milvus_client.flush(collection_name=collection_name)
-
-    return len(data_to_insert)
-
-def _get_hash_if_url(url: str):
-    if not url: return None, None
-    try:
-        resp = requests.get(url, timeout=10)
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(resp.content, "html.parser")
-        text = soup.get_text(separator="\n", strip=True)
-        return hashlib.md5(text.encode('utf-8')).hexdigest(), datetime.now(timezone.utc).isoformat()
-    except Exception as e:
-        logger.warning(f"[Admin API] Failed to get hash for {url}: {e}")
-        return None, None
-
-def init_milvus_collection():
-    """Initializes the collection if it doesn't exist, similar to rag-web-source2-hybrid.py"""
-    milvus_client = MilvusClient(
-        uri=config.CLUSTER_ENDPOINT,
-        token=config.ZILLIZ_API_KEY,
-    )
-    collection_name = config.MILVUS_COLLECTION
-
-    if milvus_client.has_collection(collection_name):
-        return milvus_client, collection_name
-
-    logger.info(f"[Admin API] Collection {collection_name} non-existent, creating it...")
-    schema = milvus_client.create_schema(
-        auto_id=False,
-        enable_dynamic_field=True
-    )
-    schema.add_field("id", DataType.INT64, is_primary=True)
-    schema.add_field("text", DataType.VARCHAR, max_length=5000, enable_analyzer=True)
-    schema.add_field("source_file", DataType.VARCHAR, max_length=256)
-    schema.add_field("source_path", DataType.VARCHAR, max_length=2048)
-    schema.add_field("source_url", DataType.VARCHAR, max_length=2048)  # [CODE-5] 專這个字段將 200 展小為 2048，与 source_path 一致，支援較長的 URL
-    schema.add_field("identity", DataType.ARRAY, element_type=DataType.VARCHAR, max_capacity=200, max_length=200, nullable=True)
-    schema.add_field("education_system", DataType.ARRAY, element_type=DataType.VARCHAR, max_capacity=200, max_length=200, nullable=True)
-    schema.add_field("category", DataType.ARRAY, element_type=DataType.VARCHAR, max_capacity=200, max_length=200, nullable=True)
-    schema.add_field("tags", DataType.ARRAY, element_type=DataType.VARCHAR, max_capacity=200, max_length=200, nullable=True)
-    schema.add_field("vector", DataType.FLOAT_VECTOR, dim=1536)
-    schema.add_field("text_sparse", DataType.SPARSE_FLOAT_VECTOR, description="Sparse vector")
-
-    bm25_function = Function(
-        name="text_bm25_emb",
-        input_field_names=["text"],
-        output_field_names=["text_sparse"],
-        function_type=FunctionType.BM25,
-    )
-    schema.add_function(bm25_function)
-
-    milvus_client.create_collection(
-        collection_name=collection_name,
-        schema=schema,
-        consistency_level="Bounded"
-    )
-
-    index_params = milvus_client.prepare_index_params()
-    index_params.add_index(
-        field_name="vector", index_name="vector_index", 
-        index_type="AUTOINDEX", metric_type="COSINE"
-    )
-    index_params.add_index(
-        field_name="text_sparse", index_name="text_sparse_index",
-        index_type="SPARSE_INVERTED_INDEX", metric_type="BM25",
-        params={"inverted_index_algo": "DAAT_MAXSCORE"}
-    )
-    milvus_client.create_index(collection_name=collection_name, index_params=index_params)
-    milvus_client.load_collection(collection_name=collection_name)
-    
-    return milvus_client, collection_name
 
 # --- Endpoints ---
 
@@ -246,9 +112,44 @@ async def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends
         )
     access_token_expires = timedelta(minutes=config.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
-        data={"sub": config.ADMIN_USERNAME}, expires_delta=access_token_expires
+        data={"sub": config.ADMIN_USERNAME}, expires_delta=access_token_expires, token_type="access"
     )
-    return {"access_token": access_token, "token_type": "bearer"}
+    
+    refresh_token_expires = timedelta(days=config.REFRESH_TOKEN_EXPIRE_DAYS)
+    refresh_token = create_access_token(
+        data={"sub": config.ADMIN_USERNAME}, expires_delta=refresh_token_expires, token_type="refresh"
+    )
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer"
+    }
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
+
+@router.post("/refresh")
+@limiter.limit("10/minute")
+async def refresh_token(request: Request, refresh_request: RefreshTokenRequest):
+    credentials_exception = HTTPException(
+        status_code=401,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(refresh_request.refresh_token, config.JWT_SECRET_KEY, algorithms=[config.ALGORITHM])
+        username: str = payload.get("sub")
+        token_type: str = payload.get("type")
+        if username is None or username != config.ADMIN_USERNAME or token_type != "refresh":
+            raise credentials_exception
+            
+        access_token_expires = timedelta(minutes=config.ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = create_access_token(
+            data={"sub": config.ADMIN_USERNAME}, expires_delta=access_token_expires, token_type="access"
+        )
+        return {"access_token": access_token, "token_type": "bearer"}
+    except jwt.InvalidTokenError:
+        raise credentials_exception
 
 def _parse_json_array(value):
     """Safely parse a JSON string into a list. Returns [] on failure."""
@@ -369,23 +270,7 @@ def extract_scholarship_info(request: ExtractRequest, current_admin: str = Depen
     else:
         content_to_process = request.text
         
-    system_prompt = """
-    你是一個獎學金資訊擷取的專家助理。請從收到的內容中提取所需的資訊並以 JSON 格式回傳。
-    請提取以下欄位：
-    - title (名稱)
-    - link (網址 - 若內容有提供的話)
-    - category (衣珠類別，例如: "生活無憂", 如果沒有請寫 "")
-    - education_system (學制：陣列，例如 ["大學部", "研究所"])
-    - tags (類別/種類：陣列，例如 ["減免", "助學金"])
-    - identity (身分：陣列，例如 ["中低收入戶", "低收入戶", "原住民"])
-    - amount_summary (金額說明)
-    - description (介紹 - 簡要描述)
-    - application_date_text (申請日期)
-    - contact (聯絡人)
-    - markdown_content (請把所有資訊整理成一篇詳細的 Markdown 文章，用於存入知識庫。文章應該包含所有重要細節與資格條件)
-    
-    回傳的 JSON 需要包含上述 key 值。不要回傳 markdown 代碼塊格式，只需回傳合法的 JSON 字串。
-    """
+    system_prompt = PROMPTS['zh']['extraction_system']
     
     try:
         response = openai_client.chat.completions.create(

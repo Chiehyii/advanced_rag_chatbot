@@ -13,6 +13,7 @@ from typing import List, Optional
 import psycopg2
 import traceback
 import json
+import time
 from fastapi.responses import StreamingResponse, JSONResponse
 from rag_service import stream_chat_pipeline
 import admin_api
@@ -24,6 +25,9 @@ from slowapi.errors import RateLimitExceeded
 
 # 建立速率限制器（以 IP 為識別）
 limiter = Limiter(key_func=get_remote_address)
+
+# 簡單記憶體快取，用於 filter_scholarships (10分鐘 TTL)
+_scholarship_cache = {"data": None, "timestamp": 0}
 
 # 取得 logger 實例 (建立這個檔案專屬的 logger)
 logger = get_logger(__name__)
@@ -229,8 +233,12 @@ async def feedback_endpoint(request: Request, feedback_request: FeedbackRequest)
 async def filter_scholarships(request: Request):
     """
     公開端點：回傳獎學金清單（僅包含 title + metadata），供前端篩選 Modal 使用。
-    不需要管理員認證，但有速率限制。
+    不需要管理員認證，但有速率限制。已加入 10 分鐘記憶體快取。
     """
+    global _scholarship_cache
+    if _scholarship_cache["data"] is not None and (time.time() - _scholarship_cache["timestamp"] < 600):
+        return {"status": "success", "data": _scholarship_cache["data"], "cached": True}
+
     def _query_scholarships():
         if not config.DB_POOL:
             return []
@@ -275,7 +283,12 @@ async def filter_scholarships(request: Request):
                 config.DB_POOL.putconn(conn)
 
     data = await asyncio.to_thread(_query_scholarships)
-    return {"status": "success", "data": data}
+    
+    # 更新快取
+    _scholarship_cache["data"] = data
+    _scholarship_cache["timestamp"] = time.time()
+    
+    return {"status": "success", "data": data, "cached": False}
 
 # --- Static Files and Schemas ---
 @app.get("/metadata_schema.json")

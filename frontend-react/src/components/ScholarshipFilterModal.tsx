@@ -20,6 +20,10 @@ interface ScholarshipFilterModalProps {
 const MAX_TAGS = 3;
 const API_BASE_URL = import.meta.env.VITE_API_URL || '';
 
+// Module-level cache to persist data across modal opens during the same session
+let cachedScholarships: ScholarshipListItem[] | null = null;
+let cachedSchema: MetadataSchema | null = null;
+
 export const ScholarshipFilterModal: React.FC<ScholarshipFilterModalProps> = ({
   isOpen,
   onClose,
@@ -47,6 +51,12 @@ export const ScholarshipFilterModal: React.FC<ScholarshipFilterModalProps> = ({
     if (!isOpen) return;
 
     const loadData = async () => {
+      if (cachedScholarships && cachedSchema) {
+        setScholarships(cachedScholarships);
+        setSchema(cachedSchema);
+        return;
+      }
+
       setLoading(true);
       try {
         const [schRes, schemaRes] = await Promise.all([
@@ -56,8 +66,10 @@ export const ScholarshipFilterModal: React.FC<ScholarshipFilterModalProps> = ({
         const schData = await schRes.json();
         const schemaData = await schemaRes.json();
         if (schData.status === 'success') {
+          cachedScholarships = schData.data;
           setScholarships(schData.data);
         }
+        cachedSchema = schemaData;
         setSchema(schemaData);
       } catch (err) {
         console.error('Failed to load filter data:', err);

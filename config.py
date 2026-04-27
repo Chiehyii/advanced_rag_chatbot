@@ -21,7 +21,8 @@ JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 if not (ADMIN_PASSWORD or ADMIN_PASSWORD_HASH) or not JWT_SECRET_KEY:
     raise ValueError("Either ADMIN_PASSWORD or ADMIN_PASSWORD_HASH, and JWT_SECRET_KEY must be set in environment variables.")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 # 1 day
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 # 1 hour
+REFRESH_TOKEN_EXPIRE_DAYS = 7 # 7 days
 
 # --- Zilliz / Milvus ---
 ZILLIZ_API_KEY = os.getenv("ZILLIZ_API_KEY")

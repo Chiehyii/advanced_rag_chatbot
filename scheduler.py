@@ -1,7 +1,4 @@
-import time
-import uuid
 import hashlib
-import requests
 import json
 import asyncio
 import aiohttp
@@ -9,15 +6,18 @@ from bs4 import BeautifulSoup
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from datetime import datetime, timezone
-from concurrent.futures import ThreadPoolExecutor, as_completed  # 雖然不再用於 scraping，保留備用
 import config
-from admin_api import openai_client, init_milvus_collection, emb_texts_batch  # [CODE-2]
 from db import get_db_cursor
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from utils import is_safe_url
 from logger import get_logger
 from notifier import send_line_message
+from prompts import PROMPTS
+from admin_api import openai_client
+from milvus_service import init_milvus_collection, emb_texts_batch
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
 logger = get_logger(__name__)
+
 
 def compute_md5(text: str) -> str:
     return hashlib.md5(text.encode('utf-8')).hexdigest()
@@ -66,23 +66,7 @@ async def _async_run_inspection(rows):
     return scraped_results
 
 def ask_ai_to_extract(url: str, content: str) -> dict:
-    system_prompt = """
-    你是一個獎學金資訊擷取的專家助理。請從收到的內容中提取所需的資訊並以 JSON 格式回傳。
-    請提取以下欄位：
-    - title (名稱)
-    - link (網址 - 若內容有提供的話)
-    - category (衣珠類別，例如: "生活無憂", 如果沒有請寫 "")
-    - education_system (學制：陣列)
-    - tags (類別/種類：陣列)
-    - identity (身分：陣列)
-    - amount_summary (金額說明)
-    - description (介紹 - 簡要描述)
-    - application_date_text (申請日期)
-    - contact (聯絡人)
-    - markdown_content (請把所有資訊整理成一篇詳細的 Markdown 文章，用於存入知識庫。文章應該包含所有重要細節與資格條件)
-    
-    回傳的 JSON 需要包含上述 key 值。不要回傳 markdown 代碼塊格式，只需回傳合法的 JSON 字串。
-    """
+    system_prompt = PROMPTS['zh']['extraction_system']
     try:
         safe_content = content[:8000] if content else ""
         response = openai_client.chat.completions.create(
