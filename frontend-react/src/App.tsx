@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useRef, Suspense } from 'react';
+import React, { useState, useEffect, useRef, useMemo, Suspense } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import { MessageList } from './components/MessageList';
 import { ChatInput } from './components/ChatInput';
 import { FeedbackModal } from './components/FeedbackModal';
 import { ScholarshipFilterModal } from './components/ScholarshipFilterModal';
 import { DesktopSidebar } from './components/DesktopSidebar';
+import { OnboardingTour, TourStep } from './components/OnboardingTour';
 import { Trash2 } from 'lucide-react';
 import { Message, Language, ScholarshipTag } from './types';
 import './index.css';
@@ -70,7 +71,20 @@ export const translations = {
     filter_max_hint: "已達上限 3 個",
     filter_loading: "載入中...",
     filter_empty: "沒有符合的結果",
-    filter_remove_tag: "移除"
+    filter_remove_tag: "移除",
+    tour_button: "使用說明",
+    tour_step_sidebar_title: "📌 側邊選單",
+    tour_step_sidebar_desc: "這裡可以前往學務處首頁、切換語言（中/英），以及聯繫系統管理員取得技術支援。",
+    tour_step_input_title: "💬 提問輸入框",
+    tour_step_input_desc: "在這裡輸入您的問題，按 Enter 或點右側送出按鈕即可發送。支援 Shift + Enter 換行。",
+    tour_step_filter_title: "🎯 獎學金篩選",
+    tour_step_filter_desc: "點擊 ＋ 按鈕可開啟獎學金篩選器，選擇特定獎學金後系統會更精準地回答相關問題（最多選 3 個）。",
+    tour_step_examples_title: "💡 範例問題",
+    tour_step_examples_desc: "不知道怎麼問？直接點擊這些預設問題，即可快速開始對話！",
+    tour_step_clear_title: "🗑️ 清除對話",
+    tour_step_clear_desc: "點擊此按鈕可清除所有聊天記錄，重新開始一段新的對話。",
+    tour_step_response_title: "🤖 AI 回答",
+    tour_step_response_desc: "AI 回答會顯示在這裡。回答中的 [1][2] 標記可點擊查看引用來源；右側會顯示來源卡片，下方可對回答按讚或回報問題。"
   },
   en: {
     welcome_title: "Hi! Ask me about scholarships!",
@@ -116,7 +130,20 @@ export const translations = {
     filter_max_hint: "Max 3 reached",
     filter_loading: "Loading...",
     filter_empty: "No matching results",
-    filter_remove_tag: "Remove"
+    filter_remove_tag: "Remove",
+    tour_button: "User Guide",
+    tour_step_sidebar_title: "📌 Sidebar Menu",
+    tour_step_sidebar_desc: "Navigate to the Student Affairs homepage, switch between Chinese and English, or contact the system administrator for support.",
+    tour_step_input_title: "💬 Chat Input",
+    tour_step_input_desc: "Type your question here and press Enter or click the send button. Use Shift + Enter for a new line.",
+    tour_step_filter_title: "🎯 Scholarship Filter",
+    tour_step_filter_desc: "Click the + button to open the scholarship filter. Select specific scholarships so the system can answer related questions more accurately (max 3).",
+    tour_step_examples_title: "💡 Example Questions",
+    tour_step_examples_desc: "Not sure what to ask? Click one of these preset questions to start a conversation right away!",
+    tour_step_clear_title: "🗑️ Clear Chat",
+    tour_step_clear_desc: "Click this button to clear all chat history and start a fresh conversation.",
+    tour_step_response_title: "🤖 AI Response",
+    tour_step_response_desc: "AI responses appear here. Inline [1][2] markers are clickable to view citation sources; source cards are shown on the right side. You can also like or report answers below each response."
   }
 };
 function App() {
@@ -142,6 +169,8 @@ function App() {
   // Scholarship filter & tag state
   const [selectedTags, setSelectedTags] = useState<ScholarshipTag[]>([]);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
+  // Onboarding tour state
+  const [isTourOpen, setIsTourOpen] = useState(false);
   // Persist messages to sessionStorage whenever they change
   useEffect(() => {
     // Only save completed (non-streaming) messages
@@ -340,6 +369,23 @@ function App() {
   };
   const isInitialState = messages.length === 0;
   const t = translations[language];
+
+  // Define tour steps — some steps only apply on initial state or chat state
+  const tourSteps = useMemo<TourStep[]>(() => {
+    const base: TourStep[] = [
+      { targetSelector: '.sidebar-nav', i18nKey: 'tour_step_sidebar', position: 'right' },
+      { targetSelector: '.input-wrapper', i18nKey: 'tour_step_input', position: 'top' },
+      { targetSelector: '.filter-trigger-btn', i18nKey: 'tour_step_filter', position: 'top' },
+    ];
+    if (isInitialState) {
+      base.push({ targetSelector: '.example-questions-container', i18nKey: 'tour_step_examples', position: 'top' });
+    }
+    base.push({ targetSelector: '.clear-chat-btn', i18nKey: 'tour_step_clear', position: 'bottom' });
+    if (!isInitialState) {
+      base.push({ targetSelector: '.bot-message-container', i18nKey: 'tour_step_response', position: 'bottom' });
+    }
+    return base;
+  }, [isInitialState]);
   return (
     <Routes>
       <Route path="/admin/*" element={
@@ -354,6 +400,7 @@ function App() {
               language={language}
               onLanguageChange={setLanguage}
               onHelp={() => alert(t.help_alert)}
+              onTour={() => setIsTourOpen(true)}
             />
             <div id="chat-side" style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, height: '100%', overflow: 'hidden' }}>
               {/* Minimal top bar — only trash icon */}
@@ -432,6 +479,13 @@ function App() {
             onSelectScholarship={handleAddTag}
             selectedTags={selectedTags}
             language={language}
+          />
+          <OnboardingTour
+            isOpen={isTourOpen}
+            onClose={() => setIsTourOpen(false)}
+            language={language}
+            steps={tourSteps}
+            translations={t}
           />
         </>
       } />

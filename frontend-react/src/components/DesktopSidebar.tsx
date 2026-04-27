@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Globe, HelpCircle, ChevronRight, Menu, X, ExternalLink } from 'lucide-react';
+import { Globe, HelpCircle, ChevronRight, Menu, X, ExternalLink, BookOpen } from 'lucide-react';
 import { Language } from '../types';
 import { translations } from '../App';
 
@@ -7,10 +7,11 @@ interface DesktopSidebarProps {
   language: Language;
   onLanguageChange: (lang: Language) => void;
   onHelp: () => void;
+  onTour: () => void;
 }
 
 const SidebarContent: React.FC<DesktopSidebarProps & { onClose?: () => void }> = ({
-  language, onLanguageChange, onHelp, onClose
+  language, onLanguageChange, onHelp, onTour, onClose
 }) => {
   const [langOpen, setLangOpen] = useState(false);
   const t = translations[language];
@@ -62,6 +63,17 @@ const SidebarContent: React.FC<DesktopSidebarProps & { onClose?: () => void }> =
             </div>
           )}
         </div>
+
+        {/* User Guide / Tour */}
+        <button
+          type="button"
+          className="sidebar-nav-item"
+          onClick={() => { onTour(); if (onClose) onClose(); }}
+          title={(t as any).tour_button || '使用說明'}
+        >
+          <BookOpen size={20} strokeWidth={1.5} />
+          <span className="sidebar-nav-label">{(t as any).tour_button || '使用說明'}</span>
+        </button>
 
         {/* Help */}
         <button
