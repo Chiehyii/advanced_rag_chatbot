@@ -152,7 +152,7 @@ def _get_hash_if_url(url: str):
         text = soup.get_text(separator="\n", strip=True)
         return hashlib.md5(text.encode('utf-8')).hexdigest(), datetime.now(timezone.utc).isoformat()
     except Exception as e:
-        print(f"Failed to get hash for {url}: {e}")
+        logger.warning(f"[Admin API] Failed to get hash for {url}: {e}")
         return None, None
 
 def init_milvus_collection():
@@ -166,7 +166,7 @@ def init_milvus_collection():
     if milvus_client.has_collection(collection_name):
         return milvus_client, collection_name
 
-    print(f"Collection {collection_name} non-existent, creating it...")
+    logger.info(f"[Admin API] Collection {collection_name} non-existent, creating it...")
     schema = milvus_client.create_schema(
         auto_id=False,
         enable_dynamic_field=True

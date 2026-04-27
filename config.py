@@ -36,9 +36,6 @@ DB_NAME = os.getenv("DB_NAME")
 DB_USER = os.getenv("DB_USER")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
 
-# (已棄用) API Key — 已改用 Rate Limiting 保護公開端點
-API_SECRET_KEY = os.getenv("API_SECRET_KEY")
-
 # --- Rate Limiting ---
 RATE_LIMIT_CHAT = os.getenv("RATE_LIMIT_CHAT", "10/minute")
 RATE_LIMIT_FEEDBACK = os.getenv("RATE_LIMIT_FEEDBACK", "20/minute")

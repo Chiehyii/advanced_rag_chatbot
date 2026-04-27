@@ -7,6 +7,7 @@ import asyncio
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional
 import psycopg2
@@ -32,27 +33,29 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # --- API Definition ---
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    start_scheduler()
+    yield
+
 app = FastAPI(
     title="Chatbot RAG API",
     description="An API for the Milvus RAG chatbot.",
     version="1.0.0",
     docs_url=None if getattr(config, 'ENVIRONMENT', 'production') == 'production' else '/docs',
     redoc_url=None if getattr(config, 'ENVIRONMENT', 'production') == 'production' else '/redoc',
+    lifespan=lifespan,
 )
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
-@app.on_event("startup")
-async def startup_event():
-    start_scheduler()
 
 # --- Middleware ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.ALLOWED_ORIGINS_LIST,  # Use the allowlist from config
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "Accept", "X-Request-ID"],
 )
 
 @app.middleware("http")
@@ -103,6 +106,12 @@ class FeedbackRequest(BaseModel):
 # --- API Endpoints ---
 
 app.include_router(admin_api.router)
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for monitoring."""
+    db_status = "ok" if getattr(config, 'DB_POOL', None) else "unavailable"
+    return {"status": "ok", "db": db_status}
 
 @app.post("/chat")
 @limiter.limit(config.RATE_LIMIT_CHAT)

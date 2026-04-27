@@ -52,8 +52,7 @@ async def _async_run_inspection(rows):
             latest_text = await _fetch_url_text(session, url)
         return row, latest_text
     
-    connector = aiohttp.TCPConnector(ssl=False)
-    async with aiohttp.ClientSession(connector=connector) as session:
+    async with aiohttp.ClientSession() as session:
         tasks = [fetch_row(session, row) for row in rows]
         # 並發執行，某個失敗不會中斷全域
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -96,7 +95,7 @@ def ask_ai_to_extract(url: str, content: str) -> dict:
         )
         return json.loads(response.choices[0].message.content)
     except Exception as e:
-        print(f"[Scheduler] AI Extraction failed for {url}: {e}")
+        logger.error(f"[Scheduler] AI Extraction failed for {url}: {e}", exc_info=True)
         return {}
 
 def process_scholarship_update(row, new_hash, new_text):
@@ -177,7 +176,7 @@ def run_inspection():
         new_hash = compute_md5(latest_text)
         
         if old_hash != new_hash:
-            print(f"[Scheduler] Content change detected for {title} ({url})")
+            logger.info(f"[Scheduler] Content change detected for {title} ({url})")
             success = process_scholarship_update(row, new_hash, latest_text)
             if success:
                 changed_items.append((title, url))

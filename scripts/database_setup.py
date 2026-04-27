@@ -5,6 +5,9 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
 import psycopg2
 from psycopg2 import sql
+from logger import get_logger
+
+logger = get_logger(__name__)
 
 # --- Constants ---
 # It's better to get these from environment variables
@@ -97,11 +100,11 @@ def create_database_and_table():
 
         # Commit the changes
         conn.commit()
-        print(f"Database '{DB_NAME}', table '{TABLE_NAME}', and 'scholarships' table are set up successfully in PostgreSQL.")
+        logger.info(f"Database '{DB_NAME}', table '{TABLE_NAME}', and 'scholarships' table are set up successfully in PostgreSQL.")
 
     except psycopg2.Error as e:
         # 🚨 ERROR：資料庫建立錯誤
-        print(f"[DB] Database error: {e}")
+        logger.error(f"[DB] Database error: {e}")
     finally:
         if cursor:
             cursor.close()
