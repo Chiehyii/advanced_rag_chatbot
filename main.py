@@ -36,6 +36,8 @@ app = FastAPI(
     title="Chatbot RAG API",
     description="An API for the Milvus RAG chatbot.",
     version="1.0.0",
+    docs_url=None if getattr(config, 'ENVIRONMENT', 'production') == 'production' else '/docs',
+    redoc_url=None if getattr(config, 'ENVIRONMENT', 'production') == 'production' else '/redoc',
 )
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
@@ -52,6 +54,18 @@ app.add_middleware(
     allow_methods=["*"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
 )
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    """為所有請求加入 Security Headers"""
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if request.url.scheme == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
 
 @app.middleware("http")
 async def request_id_middleware(request: Request, call_next):
