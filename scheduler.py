@@ -75,6 +75,8 @@ def ask_ai_to_extract(url: str, content: str) -> dict:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"URL: {url}\n\nContent:\n" + safe_content}
             ],
+            max_completion_tokens=1000,
+            # reasoning_effort="minimal",
             response_format={ "type": "json_object" }
         )
         return json.loads(response.choices[0].message.content)

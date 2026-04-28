@@ -243,12 +243,13 @@ async def generate_answer_stream(question: str, cleaned_contexts: list, lang: st
     user_prompt = PROMPTS[lang]['rag_user'].format(question=question, context_for_llm=context_for_llm)
 
     stream = await openai_client.chat.completions.create(
-        model=config.OPENAI_MODEL_NAME,
+        model=config.OPENAI_MODEL_NAME_REASONING,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ],
-        temperature=0.0,
+        # temperature=0.0,
+        max_completion_tokens=3000,
         stream=True,
         stream_options={"include_usage": True},
     )
@@ -292,12 +293,14 @@ async def _handle_rag_branch(rephrased_question: str, cleaned_contexts: list, la
 async def _handle_small_talk_branch(rephrased_question: str, lang: str, usage_data: dict):
     logger.info(f"[Small Talk] Fallback to small talk: No relevant documents found.")
     stream = await openai_client.chat.completions.create(
-        model=config.OPENAI_MODEL_NAME,
+        model=config.OPENAI_MODEL_NAME_REASONING,
         messages=[
             {"role": "system", "content": PROMPTS[lang]['small_talk_system']},
             {"role": "user", "content": rephrased_question}
         ],
-        temperature=0.7,
+        # temperature=0.7,
+        max_completion_tokens=1000,
+        # reasoning_effort="minimal",
         stream=True,
         stream_options={"include_usage": True},
     )

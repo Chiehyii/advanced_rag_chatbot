@@ -107,8 +107,10 @@ async def analyze_query(question: str, lang: str = 'zh') -> tuple[str, str]:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": question}
             ],
+            max_completion_tokens=1000,
+            # reasoning_effort="minimal",
             response_format=QueryAnalysis,
-            temperature=0.0
+            # temperature=0.0
         )
         
         parsed_result = completion.choices[0].message.parsed

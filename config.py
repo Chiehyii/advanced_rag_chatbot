@@ -10,7 +10,8 @@ load_dotenv()
 
 # --- OpenAI ---
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL_NAME = os.getenv("OPENAI_MODEL_NAME", "gpt-4o-mini")
+OPENAI_MODEL_NAME = os.getenv("OPENAI_MODEL_NAME", "gpt-4.1-mini")
+OPENAI_MODEL_NAME_REASONING = os.getenv("OPENAI_MODEL_NAME_REASONING", "gpt-5-mini")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
 
 # --- Authentication & Security ---
