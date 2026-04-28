@@ -78,6 +78,172 @@ def verify_admin(token: str = Depends(oauth2_scheme)):
         raise credentials_exception
     return username
 
+# --- Dashboard Endpoints ---
+
+@router.get("/dashboard/summary")
+def dashboard_summary(current_admin: str = Depends(verify_admin)):
+    """Dashboard KPI 摘要：今日提問數、獨立使用者、平均延遲、Token 消耗、滿意度、峰值負載"""
+    try:
+        with get_db_cursor() as (conn, cursor):
+            table = config.DB_TABLE_NAME
+            # --- 基礎 KPI ---
+            cursor.execute(f"""
+                SELECT
+                    COUNT(*) AS today_queries,
+                    COUNT(DISTINCT user_id) AS unique_users,
+                    COALESCE(AVG(latency_ms), 0) AS avg_latency_ms,
+                    COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                    COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+                    COALESCE(SUM(completion_tokens), 0) AS completion_tokens
+                FROM {table}
+                WHERE timestamp::date = CURRENT_DATE;
+            """)
+            row = cursor.fetchone()
+            today_queries = row[0] or 0
+            unique_users = row[1] or 0
+            avg_latency = round(float(row[2] or 0), 1)
+            total_tokens = int(row[3] or 0)
+            prompt_tokens = int(row[4] or 0)
+            completion_tokens = int(row[5] or 0)
+
+            # --- 滿意度 ---
+            cursor.execute(f"""
+                SELECT
+                    COUNT(*) FILTER (WHERE feedback_type = 'like') AS likes,
+                    COUNT(*) FILTER (WHERE feedback_type IS NOT NULL AND feedback_type != '') AS total_feedback
+                FROM {table}
+                WHERE timestamp::date = CURRENT_DATE;
+            """)
+            fb = cursor.fetchone()
+            likes = fb[0] or 0
+            total_feedback = fb[1] or 0
+            satisfaction = round(likes / total_feedback, 2) if total_feedback > 0 else None
+
+            # --- Peak RPM (今日每分鐘最高請求數) ---
+            cursor.execute(f"""
+                SELECT
+                    COUNT(*) AS cnt,
+                    date_trunc('minute', timestamp) AS minute_bucket
+                FROM {table}
+                WHERE timestamp::date = CURRENT_DATE
+                GROUP BY minute_bucket
+                ORDER BY cnt DESC
+                LIMIT 1;
+            """)
+            peak_row = cursor.fetchone()
+            peak_rpm = int(peak_row[0]) if peak_row else 0
+            peak_rpm_time = peak_row[1].strftime("%H:%M") if peak_row else None
+
+            return {
+                "status": "success",
+                "data": {
+                    "today_queries": today_queries,
+                    "unique_users": unique_users,
+                    "avg_latency_ms": avg_latency,
+                    "total_tokens": total_tokens,
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "satisfaction_rate": satisfaction,
+                    "peak_rpm": peak_rpm,
+                    "peak_rpm_time": peak_rpm_time,
+                }
+            }
+    except Exception as e:
+        logger.error(f"[Dashboard] summary error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Dashboard summary failed")
+
+
+@router.get("/dashboard/trends")
+def dashboard_trends(
+    start_date: str | None = None,
+    end_date: str | None = None,
+    current_admin: str = Depends(verify_admin),
+):
+    """Dashboard 趨勢圖：指定日期範圍的每日提問數、Token 消耗與獨立使用者數"""
+    from datetime import date as date_type
+    # 預設：過去 7 天
+    today = date_type.today()
+    try:
+        d_end = date_type.fromisoformat(end_date) if end_date else today
+        d_start = date_type.fromisoformat(start_date) if start_date else d_end - timedelta(days=6)
+    except ValueError:
+        d_end = today
+        d_start = today - timedelta(days=6)
+
+    # 安全限制：最多 365 天
+    if (d_end - d_start).days > 365:
+        d_start = d_end - timedelta(days=365)
+    if d_start > d_end:
+        d_start, d_end = d_end, d_start
+
+    try:
+        with get_db_cursor() as (conn, cursor):
+            table = config.DB_TABLE_NAME
+            cursor.execute(f"""
+                SELECT
+                    timestamp::date AS day,
+                    COUNT(*) AS queries,
+                    COALESCE(SUM(total_tokens), 0) AS tokens,
+                    COUNT(DISTINCT user_id) AS unique_users,
+                    COALESCE(AVG(latency_ms), 0) AS avg_latency
+                FROM {table}
+                WHERE timestamp::date >= %s AND timestamp::date <= %s
+                GROUP BY day
+                ORDER BY day;
+            """, (d_start.isoformat(), d_end.isoformat()))
+            rows = cursor.fetchall()
+            labels = [r[0].strftime("%m/%d") for r in rows]
+            queries = [r[1] for r in rows]
+            tokens = [int(r[2]) for r in rows]
+            unique_users = [r[3] for r in rows]
+            avg_latency = [round(float(r[4]), 1) for r in rows]
+
+            return {
+                "status": "success",
+                "data": {
+                    "labels": labels,
+                    "queries": queries,
+                    "tokens": tokens,
+                    "unique_users": unique_users,
+                    "avg_latency": avg_latency,
+                }
+            }
+    except Exception as e:
+        logger.error(f"[Dashboard] trends error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Dashboard trends failed")
+
+
+@router.get("/dashboard/recent")
+def dashboard_recent(limit: int = 20, current_admin: str = Depends(verify_admin)):
+    """Dashboard 近期對話抽查：最近 N 筆對話紀錄"""
+    if limit < 1 or limit > 100:
+        limit = 20
+    try:
+        with get_db_cursor() as (conn, cursor):
+            table = config.DB_TABLE_NAME
+            cursor.execute(f"""
+                SELECT id, timestamp, question, answer, latency_ms, total_tokens, feedback_type
+                FROM {table}
+                ORDER BY timestamp DESC
+                LIMIT %s;
+            """, (limit,))
+            rows = cursor.fetchall()
+            result = []
+            for r in rows:
+                result.append({
+                    "id": r[0],
+                    "timestamp": r[1].isoformat() if r[1] else None,
+                    "question": r[2] or "",
+                    "answer": (r[3] or "")[:200],  # 節錄前 200 字
+                    "latency_ms": round(float(r[4] or 0), 1),
+                    "total_tokens": int(r[5] or 0),
+                    "feedback_type": r[6],
+                })
+            return {"status": "success", "data": result}
+    except Exception as e:
+        logger.error(f"[Dashboard] recent error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Dashboard recent failed")
+
 # --- Endpoints ---
 
 @router.post("/login")

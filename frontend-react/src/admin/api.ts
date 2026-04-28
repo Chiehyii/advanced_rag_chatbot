@@ -116,3 +116,29 @@ export async function apiGetMetadataSchema() {
     const res = await fetch(`${API_BASE_URL}/metadata_schema.json`);
     return res.json();
 }
+
+// --- Dashboard APIs ---
+export async function apiGetDashboardSummary() {
+    const res = await authFetch('/api/dashboard/summary');
+    if (res.status === 401) throw new Error('UNAUTHORIZED');
+    const result = await res.json();
+    if (result.status !== 'success') throw new Error('Failed to fetch dashboard summary');
+    return result.data;
+}
+export async function apiGetDashboardTrends(startDate?: string, endDate?: string) {
+    const params = new URLSearchParams();
+    if (startDate) params.set('start_date', startDate);
+    if (endDate) params.set('end_date', endDate);
+    const res = await authFetch(`/api/dashboard/trends?${params.toString()}`);
+    if (res.status === 401) throw new Error('UNAUTHORIZED');
+    const result = await res.json();
+    if (result.status !== 'success') throw new Error('Failed to fetch dashboard trends');
+    return result.data;
+}
+export async function apiGetDashboardRecent(limit: number = 20) {
+    const res = await authFetch(`/api/dashboard/recent?limit=${limit}`);
+    if (res.status === 401) throw new Error('UNAUTHORIZED');
+    const result = await res.json();
+    if (result.status !== 'success') throw new Error('Failed to fetch dashboard recent');
+    return result.data;
+}

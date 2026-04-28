@@ -2,7 +2,9 @@ import { useState, useRef, useCallback } from 'react';
 import { AdminSidebar } from './AdminSidebar';
 import { ExtractionSection } from './ExtractionSection';
 import { ScholarshipForm } from './ScholarshipForm';
+import { Dashboard } from './Dashboard';
 import { Scholarship, AdminMode } from './types';
+import { BarChart3, FolderOpen } from 'lucide-react';
 import './admin.css';
 
 interface AdminLayoutProps {
@@ -14,10 +16,10 @@ interface ToastState {
     visible: boolean;
 }
 
-type ViewMode = 'dashboard' | 'detail';
+type ViewMode = 'analytics' | 'dashboard' | 'detail';
 
 export function AdminLayout({ onLogout }: AdminLayoutProps) {
-    const [view, setView] = useState<ViewMode>('dashboard');
+    const [view, setView] = useState<ViewMode>('analytics');
     const [selectedScholarship, setSelectedScholarship] = useState<Scholarship | null>(null);
     const [mode, setMode] = useState<AdminMode>('CREATE');
     const [toast, setToast] = useState<ToastState>({ message: '', type: 'success', visible: false });
@@ -76,63 +78,85 @@ export function AdminLayout({ onLogout }: AdminLayoutProps) {
 
     return (
         <div className="app-container">
-            <AdminSidebar
-                onSelect={handleSelectScholarship}
-                onUnauthorized={handleUnauthorized}
-                refreshTrigger={refreshTrigger}
-            />
-            <main className="main-stage">
-                <header className="top-bar glass-panel">
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                        {view === 'detail' && (
-                            <button
-                                onClick={handleBack}
-                                className="back-btn"
-                                id="btn-back"
-                            >
-                                ← 返回總覽
-                            </button>
-                        )}
-                        <h1>{view === 'dashboard' ? '資料庫建檔' : '資料庫編輯'}</h1>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                        <div className="status-indicator" id="status-indicator">
-                            <span className="dot green" />
-                            系統已連線
-                        </div>
+            <header className="top-bar glass-panel">
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    {view === 'detail' && (
                         <button
-                            onClick={() => { localStorage.removeItem('admin_jwt'); onLogout(); }}
-                            style={{
-                                background: 'none', border: '1px solid #cbd5e1', borderRadius: 8,
-                                padding: '6px 14px', cursor: 'pointer', fontSize: '0.85rem', color: '#64748b',
-                            }}>
-                            登出
+                            onClick={handleBack}
+                            className="back-btn"
+                            id="btn-back"
+                        >
+                            ← 返回總覽
+                        </button>
+                    )}
+                    <div className="top-bar-tabs">
+                        <button
+                            className={`top-bar-tab ${view === 'analytics' ? 'active' : ''}`}
+                            onClick={() => { setView('analytics'); setSelectedScholarship(null); }}
+                        >
+                            <BarChart3 size={16} /> 數據分析
+                        </button>
+                        <button
+                            className={`top-bar-tab ${view === 'dashboard' || view === 'detail' ? 'active' : ''}`}
+                            onClick={() => { setView('dashboard'); setSelectedScholarship(null); }}
+                        >
+                            <FolderOpen size={16} /> 知識庫管理
                         </button>
                     </div>
-                </header>
-
-                <div className="content-wrapper">
-                    {view === 'dashboard' && (
-                        <ExtractionSection
-                            onExtracted={handleExtracted}
-                            onUnauthorized={handleUnauthorized}
-                            onToast={showToast}
-                            urlRef={extractedUrlRef}
-                        />
-                    )}
-
-                    {view === 'detail' && selectedScholarship && (
-                        <ScholarshipForm
-                            initialData={selectedScholarship}
-                            mode={mode}
-                            onSaved={handleSaved}
-                            onDeleted={handleDeleted}
-                            onUnauthorized={handleUnauthorized}
-                            onToast={showToast}
-                        />
-                    )}
                 </div>
-            </main>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                    <div className="status-indicator" id="status-indicator">
+                        <span className="dot green" />
+                        系統已連線
+                    </div>
+                    <button
+                        onClick={() => { localStorage.removeItem('admin_jwt'); localStorage.removeItem('admin_refresh_jwt'); onLogout(); }}
+                        style={{
+                            background: 'none', border: '1px solid #cbd5e1', borderRadius: 8,
+                            padding: '6px 14px', cursor: 'pointer', fontSize: '0.85rem', color: '#64748b',
+                        }}>
+                        登出
+                    </button>
+                </div>
+            </header>
+
+            <div className="admin-body">
+                {view === 'analytics' && (
+                    <div className="content-wrapper">
+                        <Dashboard onUnauthorized={handleUnauthorized} />
+                    </div>
+                )}
+
+                {(view === 'dashboard' || view === 'detail') && (
+                    <div className="kb-layout">
+                        <AdminSidebar
+                            onSelect={handleSelectScholarship}
+                            onUnauthorized={handleUnauthorized}
+                            refreshTrigger={refreshTrigger}
+                        />
+                        <div className="content-wrapper">
+                            {view === 'dashboard' && (
+                                <ExtractionSection
+                                    onExtracted={handleExtracted}
+                                    onUnauthorized={handleUnauthorized}
+                                    onToast={showToast}
+                                    urlRef={extractedUrlRef}
+                                />
+                            )}
+                            {view === 'detail' && selectedScholarship && (
+                                <ScholarshipForm
+                                    initialData={selectedScholarship}
+                                    mode={mode}
+                                    onSaved={handleSaved}
+                                    onDeleted={handleDeleted}
+                                    onUnauthorized={handleUnauthorized}
+                                    onToast={showToast}
+                                />
+                            )}
+                        </div>
+                    </div>
+                )}
+            </div>
 
             {/* Toast */}
             <div id="toast" className={`toast ${toast.visible ? 'show' : ''} ${toast.type}`}>
