@@ -16,7 +16,7 @@ from db_repository import clean_retrieved_contexts, log_to_db
 logger = get_logger(__name__)
 
 # --- Constants ---
-MIN_RERANK_SCORE = 0.2  # Minimum Cross-Encoder score to keep a document
+MIN_RERANK_SCORE = 0.3  # Minimum Cross-Encoder score to keep a document
 
 # --- Initialize Re-Ranking Model ---
 # Using a lightweight, multilingual reranker widely used for RAG (bge-reranker-base or M3)
@@ -43,7 +43,7 @@ async def get_embedding(text):
     )
     return resp.data[0].embedding
 
-async def retrieve_context(question: str, expr: str, lang: str = 'zh', top_k: int = 10):
+async def retrieve_context(question: str, expr: str, lang: str = 'zh', top_k: int = 7):
     """根據問題進行混合檢索 (Dense + Sparse) + 過濾"""
     from pymilvus import AnnSearchRequest, RRFRanker
 
@@ -248,7 +248,8 @@ async def generate_answer_stream(question: str, cleaned_contexts: list, lang: st
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ],
-        temperature=0.0,
+        # temperature=0.0,
+        # max_completion_tokens=3000,
         stream=True,
         stream_options={"include_usage": True},
     )
@@ -297,7 +298,9 @@ async def _handle_small_talk_branch(rephrased_question: str, lang: str, usage_da
             {"role": "system", "content": PROMPTS[lang]['small_talk_system']},
             {"role": "user", "content": rephrased_question}
         ],
-        temperature=0.7,
+        # temperature=0.7,
+        # max_completion_tokens=1000,
+        # reasoning_effort="minimal",
         stream=True,
         stream_options={"include_usage": True},
     )

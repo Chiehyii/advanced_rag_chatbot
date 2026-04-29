@@ -126,6 +126,22 @@ Schema: {metadata_schema}
 
 現在，請根據以上規則處理一下問題：
 問題: {question}
+""",
+        'extraction_system': """你是一個獎學金資訊擷取的專家助理。請從收到的內容中提取所需的資訊並以 JSON 格式回傳。
+請提取以下欄位：
+- title (名稱)
+- link (網址 - 若內容有提供的話)
+- category (衣珠類別，例如: "生活無憂", 如果沒有請寫 "")
+- education_system (學制：陣列，例如 ["大學部", "研究所"])
+- tags (類別/種類：陣列，例如 ["減免", "助學金"])
+- identity (身分：陣列，例如 ["中低收入戶", "低收入戶", "原住民"])
+- amount_summary (金額說明)
+- description (介紹 - 簡要描述)
+- application_date_text (申請日期)
+- contact (聯絡人)
+- markdown_content (請把所有資訊整理成一篇詳細的 Markdown 文章，用於存入知識庫。文章應該包含所有重要細節與資格條件)
+
+回傳的 JSON 需要包含上述 key 值。不要回傳 markdown 代碼塊格式，只需回傳合法的 JSON 字串。
 """
     },
     'en': {

@@ -10,8 +10,9 @@ logger = get_logger(__name__)
 
 openai_client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
 
-# [OPT-1] 初始化 tiktoken encoder，用於計算 token 數量
-_tokenizer = tiktoken.get_encoding("cl100k_base")
+# [OPT-1] 初始化 tiktoken encoder，用於計算 token 數量 ,cl100k_base(gpt-4o-mini)
+_tokenizer = tiktoken.get_encoding("o200k_base")
+
 _HISTORY_TOKEN_BUDGET = 2500  # 留下足够空間給 RAG context 和回答
 
 def _trim_history_to_budget(history: list, budget: int = _HISTORY_TOKEN_BUDGET) -> list:
@@ -52,8 +53,8 @@ async def _translate_to_zh(text: str) -> str:
             )},
             {"role": "user", "content": text}
         ],
-        temperature=0.0,
-        max_tokens=300,
+        # temperature=0.0,
+        max_completion_tokens=500,
     )
     translated = response.choices[0].message.content.strip()
     logger.info(f"[Translate] '{text}' → '{translated}'")
@@ -88,8 +89,8 @@ async def _rephrase_question_with_history(history: list, question: str, lang: st
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        temperature=0.0,
-        max_tokens=150,
+        # temperature=0.0,
+        max_completion_tokens=800,
     )
     rephrased_question = response.choices[0].message.content.strip()
     if not rephrased_question:
@@ -131,6 +132,7 @@ async def generate_suggested_replies(question: str, context_text: str, lang: str
             {"role": "user", "content": f"User's incoming question: {question}\n\nReference Context:\n{context_text}"}
         ],
         response_format=SuggestedReplies,
-        temperature=0.7,
+        # temperature=0.7,
+        max_completion_tokens=800,
     )
     return response.choices[0].message.parsed.replies

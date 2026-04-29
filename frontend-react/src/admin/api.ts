@@ -5,7 +5,37 @@ export async function authFetch(url: string, options: RequestInit = {}): Promise
     const headers = new Headers(options.headers);
     headers.set('Authorization', `Bearer ${getToken()}`);
     const fullUrl = url.startsWith('/') ? `${API_BASE_URL}${url}` : url;
-    return fetch(fullUrl, { ...options, headers });
+    
+    let res = await fetch(fullUrl, { ...options, headers });
+    
+    if (res.status === 401) {
+        const refreshToken = localStorage.getItem('admin_refresh_jwt');
+        if (refreshToken) {
+            try {
+                const refreshRes = await fetch(`${API_BASE_URL}/api/refresh`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ refresh_token: refreshToken })
+                });
+                
+                if (refreshRes.ok) {
+                    const data = await refreshRes.json();
+                    localStorage.setItem('admin_jwt', data.access_token);
+                    // Retry original request with new token
+                    headers.set('Authorization', `Bearer ${data.access_token}`);
+                    res = await fetch(fullUrl, { ...options, headers });
+                } else {
+                    // Refresh failed, clear tokens
+                    localStorage.removeItem('admin_jwt');
+                    localStorage.removeItem('admin_refresh_jwt');
+                }
+            } catch (err) {
+                console.error("Refresh token failed", err);
+            }
+        }
+    }
+    
+    return res;
 }
 export async function apiLogin(username: string, password: string): Promise<string> {
     const formData = new URLSearchParams();
@@ -18,6 +48,9 @@ export async function apiLogin(username: string, password: string): Promise<stri
     });
     if (!res.ok) throw new Error('登入失敗');
     const data = await res.json();
+    if (data.refresh_token) {
+        localStorage.setItem('admin_refresh_jwt', data.refresh_token);
+    }
     return data.access_token;
 }
 export async function apiListScholarships(): Promise<Scholarship[]> {
@@ -83,3 +116,29 @@ export async function apiGetMetadataSchema() {
     const res = await fetch(`${API_BASE_URL}/metadata_schema.json`);
     return res.json();
 }
+
+// --- Dashboard APIs ---
+export async function apiGetDashboardSummary() {
+    const res = await authFetch('/api/dashboard/summary');
+    if (res.status === 401) throw new Error('UNAUTHORIZED');
+    const result = await res.json();
+    if (result.status !== 'success') throw new Error('Failed to fetch dashboard summary');
+    return result.data;
+}
+export async function apiGetDashboardTrends(startDate?: string, endDate?: string) {
+    const params = new URLSearchParams();
+    if (startDate) params.set('start_date', startDate);
+    if (endDate) params.set('end_date', endDate);
+    const res = await authFetch(`/api/dashboard/trends?${params.toString()}`);
+    if (res.status === 401) throw new Error('UNAUTHORIZED');
+    const result = await res.json();
+    if (result.status !== 'success') throw new Error('Failed to fetch dashboard trends');
+    return result.data;
+}
+export async function apiGetDashboardRecent(limit: number = 20) {
+    const res = await authFetch(`/api/dashboard/recent?limit=${limit}`);
+    if (res.status === 401) throw new Error('UNAUTHORIZED');
+    const result = await res.json();
+    if (result.status !== 'success') throw new Error('Failed to fetch dashboard recent');
+    return result.data;
+}

@@ -10,7 +10,8 @@ load_dotenv()
 
 # --- OpenAI ---
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL_NAME = os.getenv("OPENAI_MODEL_NAME", "gpt-4o-mini")
+OPENAI_MODEL_NAME = os.getenv("OPENAI_MODEL_NAME", "gpt-4.1-mini")
+OPENAI_MODEL_NAME_REASONING = os.getenv("OPENAI_MODEL_NAME_REASONING", "gpt-5-mini")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
 
 # --- Authentication & Security ---
@@ -21,7 +22,8 @@ JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 if not (ADMIN_PASSWORD or ADMIN_PASSWORD_HASH) or not JWT_SECRET_KEY:
     raise ValueError("Either ADMIN_PASSWORD or ADMIN_PASSWORD_HASH, and JWT_SECRET_KEY must be set in environment variables.")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 # 1 day
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 # 1 hour
+REFRESH_TOKEN_EXPIRE_DAYS = 7 # 7 days
 
 # --- Zilliz / Milvus ---
 ZILLIZ_API_KEY = os.getenv("ZILLIZ_API_KEY")
@@ -35,9 +37,6 @@ DB_PORT = os.getenv("DB_PORT", "5432")
 DB_NAME = os.getenv("DB_NAME")
 DB_USER = os.getenv("DB_USER")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
-
-# (已棄用) API Key — 已改用 Rate Limiting 保護公開端點
-API_SECRET_KEY = os.getenv("API_SECRET_KEY")
 
 # --- Rate Limiting ---
 RATE_LIMIT_CHAT = os.getenv("RATE_LIMIT_CHAT", "10/minute")

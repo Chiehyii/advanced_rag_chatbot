@@ -7,11 +7,13 @@ import asyncio
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional
 import psycopg2
 import traceback
 import json
+import time
 from fastapi.responses import StreamingResponse, JSONResponse
 from rag_service import stream_chat_pipeline
 import admin_api
@@ -24,6 +26,9 @@ from slowapi.errors import RateLimitExceeded
 # 建立速率限制器（以 IP 為識別）
 limiter = Limiter(key_func=get_remote_address)
 
+# 簡單記憶體快取，用於 filter_scholarships (10分鐘 TTL)
+_scholarship_cache = {"data": None, "timestamp": 0}
+
 # 取得 logger 實例 (建立這個檔案專屬的 logger)
 logger = get_logger(__name__)
 
@@ -32,26 +37,42 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # --- API Definition ---
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    start_scheduler()
+    yield
+
 app = FastAPI(
     title="Chatbot RAG API",
     description="An API for the Milvus RAG chatbot.",
     version="1.0.0",
+    docs_url=None if getattr(config, 'ENVIRONMENT', 'production') == 'production' else '/docs',
+    redoc_url=None if getattr(config, 'ENVIRONMENT', 'production') == 'production' else '/redoc',
+    lifespan=lifespan,
 )
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
-@app.on_event("startup")
-async def startup_event():
-    start_scheduler()
 
 # --- Middleware ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.ALLOWED_ORIGINS_LIST,  # Use the allowlist from config
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "Accept", "X-Request-ID"],
 )
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    """為所有請求加入 Security Headers"""
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if request.url.scheme == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
 
 @app.middleware("http")
 async def request_id_middleware(request: Request, call_next):
@@ -89,6 +110,12 @@ class FeedbackRequest(BaseModel):
 # --- API Endpoints ---
 
 app.include_router(admin_api.router)
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for monitoring."""
+    db_status = "ok" if getattr(config, 'DB_POOL', None) else "unavailable"
+    return {"status": "ok", "db": db_status}
 
 @app.post("/chat")
 @limiter.limit(config.RATE_LIMIT_CHAT)
@@ -206,8 +233,12 @@ async def feedback_endpoint(request: Request, feedback_request: FeedbackRequest)
 async def filter_scholarships(request: Request):
     """
     公開端點：回傳獎學金清單（僅包含 title + metadata），供前端篩選 Modal 使用。
-    不需要管理員認證，但有速率限制。
+    不需要管理員認證，但有速率限制。已加入 10 分鐘記憶體快取。
     """
+    global _scholarship_cache
+    if _scholarship_cache["data"] is not None and (time.time() - _scholarship_cache["timestamp"] < 600):
+        return {"status": "success", "data": _scholarship_cache["data"], "cached": True}
+
     def _query_scholarships():
         if not config.DB_POOL:
             return []
@@ -252,7 +283,12 @@ async def filter_scholarships(request: Request):
                 config.DB_POOL.putconn(conn)
 
     data = await asyncio.to_thread(_query_scholarships)
-    return {"status": "success", "data": data}
+    
+    # 更新快取
+    _scholarship_cache["data"] = data
+    _scholarship_cache["timestamp"] = time.time()
+    
+    return {"status": "success", "data": data, "cached": False}
 
 # --- Static Files and Schemas ---
 @app.get("/metadata_schema.json")

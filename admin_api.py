@@ -1,8 +1,6 @@
-import os
 import re
 import uuid
 import json
-import random
 import requests
 from bs4 import BeautifulSoup
 from typing import List, Optional
@@ -11,16 +9,17 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from pydantic import BaseModel
-import psycopg2
 from openai import OpenAI
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from pymilvus import MilvusClient, DataType, Function, FunctionType
 import config
 import hashlib
 from datetime import datetime, timedelta, timezone
 import jwt
 from utils import is_safe_url
 from logger import get_logger
+from prompts import PROMPTS
+from milvus_service import init_milvus_collection, _insert_chunks_to_milvus
+from scraper_service import _get_hash_if_url
+from db import get_db_cursor
 
 logger = get_logger(__name__)
 
@@ -53,13 +52,13 @@ class ScholarshipForm(BaseModel):
 import bcrypt
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/login")
 
-def create_access_token(data: dict, expires_delta: timedelta | None = None):
+def create_access_token(data: dict, expires_delta: timedelta | None = None, token_type: str = "access"):
     to_encode = data.copy()
     if expires_delta:
         expire = datetime.now(timezone.utc) + expires_delta
     else:
         expire = datetime.now(timezone.utc) + timedelta(minutes=15)
-    to_encode.update({"exp": expire})
+    to_encode.update({"exp": expire, "type": token_type})
     encoded_jwt = jwt.encode(to_encode, config.JWT_SECRET_KEY, algorithm=config.ALGORITHM)
     return encoded_jwt
 
@@ -72,145 +71,178 @@ def verify_admin(token: str = Depends(oauth2_scheme)):
     try:
         payload = jwt.decode(token, config.JWT_SECRET_KEY, algorithms=[config.ALGORITHM])
         username: str = payload.get("sub")
-        if username is None or username != config.ADMIN_USERNAME:
+        token_type: str = payload.get("type", "access")
+        if username is None or username != config.ADMIN_USERNAME or token_type != "access":
             raise credentials_exception
     except jwt.InvalidTokenError:
         raise credentials_exception
     return username
 
-# --- Helper functions ---
-from db import get_db_cursor
+# --- Dashboard Endpoints ---
 
-
-def emb_text(text: str):
-    return (
-        openai_client.embeddings.create(input=text, model=config.EMBEDDING_MODEL)
-        .data[0]
-        .embedding
-    )
-
-def emb_texts_batch(texts: list[str]) -> list[list[float]]:
-    """[PERF-1] 批次嵌入：一次 API 呼叫取得所有 chunk 的向量，大幅減少等待時間。"""
-    if not texts:
-        return []
-    response = openai_client.embeddings.create(input=texts, model=config.EMBEDDING_MODEL)
-    return [item.embedding for item in response.data]
-
-def _insert_chunks_to_milvus(
-    milvus_client,
-    collection_name: str,
-    markdown_content: str,
-    title: str,
-    scholarship_code: str,
-    link: str,
-    identity: list,
-    education_system: list,
-    category: str,
-    tags: list,
-) -> int:
-    """
-    [CODE-1] 抽取的共用函式——切分、批次嵌入、寫入 Milvus。
-    save 和 update 都呼叫這鄿，不再重複相同的逻輯。
-    回傳實際插入的 chunk 數量。
-    """
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-    chunks = [c.strip() for c in text_splitter.split_text(markdown_content) if c.strip()]
-    if not chunks:
-        return 0
-
-    # [PERF-1] 批次嵌入
-    vectors = emb_texts_batch(chunks)
-
-    data_to_insert = []
-    for chunk, vector in zip(chunks, vectors):
-        data_to_insert.append({
-            # [CODE-2] 使用 UUID 確保唯一性，取代有潜在碰撞風險的 random.randint
-            "id": uuid.uuid4().int >> 65, # 右移 65 位確保結果 ≤ 2^63-1（Milvus INT64 上限）但如果數據預計會超過 1,000 萬筆 id可能會有重複的風險，建議使用 uuid.uuid4().int >> 64並重建milvus collection id 欄位= varchar
-            "text": chunk,
-            "source_file": title + ".md",
-            "source_path": scholarship_code,
-            "source_url": link or "",
-            "identity": identity,
-            "education_system": education_system,
-            "category": [category] if category else [],
-            "tags": tags,
-            "vector": vector
-        })
-
-    if data_to_insert:
-        milvus_client.insert(collection_name=collection_name, data=data_to_insert)
-        milvus_client.flush(collection_name=collection_name)
-
-    return len(data_to_insert)
-
-def _get_hash_if_url(url: str):
-    if not url: return None, None
+@router.get("/dashboard/summary")
+def dashboard_summary(current_admin: str = Depends(verify_admin)):
+    """Dashboard KPI 摘要：今日提問數、獨立使用者、平均延遲、Token 消耗、滿意度、峰值負載"""
     try:
-        resp = requests.get(url, timeout=10)
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(resp.content, "html.parser")
-        text = soup.get_text(separator="\n", strip=True)
-        return hashlib.md5(text.encode('utf-8')).hexdigest(), datetime.now(timezone.utc).isoformat()
+        with get_db_cursor() as (conn, cursor):
+            table = config.DB_TABLE_NAME
+            # --- 基礎 KPI ---
+            cursor.execute(f"""
+                SELECT
+                    COUNT(*) AS today_queries,
+                    COUNT(DISTINCT user_id) AS unique_users,
+                    COALESCE(AVG(latency_ms), 0) AS avg_latency_ms,
+                    COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                    COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+                    COALESCE(SUM(completion_tokens), 0) AS completion_tokens
+                FROM {table}
+                WHERE timestamp::date = CURRENT_DATE;
+            """)
+            row = cursor.fetchone()
+            today_queries = row[0] or 0
+            unique_users = row[1] or 0
+            avg_latency = round(float(row[2] or 0), 1)
+            total_tokens = int(row[3] or 0)
+            prompt_tokens = int(row[4] or 0)
+            completion_tokens = int(row[5] or 0)
+
+            # --- 滿意度 ---
+            cursor.execute(f"""
+                SELECT
+                    COUNT(*) FILTER (WHERE feedback_type = 'like') AS likes,
+                    COUNT(*) FILTER (WHERE feedback_type IS NOT NULL AND feedback_type != '') AS total_feedback
+                FROM {table}
+                WHERE timestamp::date = CURRENT_DATE;
+            """)
+            fb = cursor.fetchone()
+            likes = fb[0] or 0
+            total_feedback = fb[1] or 0
+            satisfaction = round(likes / total_feedback, 2) if total_feedback > 0 else None
+
+            # --- Peak RPM (今日每分鐘最高請求數) ---
+            cursor.execute(f"""
+                SELECT
+                    COUNT(*) AS cnt,
+                    date_trunc('minute', timestamp) AS minute_bucket
+                FROM {table}
+                WHERE timestamp::date = CURRENT_DATE
+                GROUP BY minute_bucket
+                ORDER BY cnt DESC
+                LIMIT 1;
+            """)
+            peak_row = cursor.fetchone()
+            peak_rpm = int(peak_row[0]) if peak_row else 0
+            peak_rpm_time = peak_row[1].strftime("%H:%M") if peak_row else None
+
+            return {
+                "status": "success",
+                "data": {
+                    "today_queries": today_queries,
+                    "unique_users": unique_users,
+                    "avg_latency_ms": avg_latency,
+                    "total_tokens": total_tokens,
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "satisfaction_rate": satisfaction,
+                    "peak_rpm": peak_rpm,
+                    "peak_rpm_time": peak_rpm_time,
+                }
+            }
     except Exception as e:
-        print(f"Failed to get hash for {url}: {e}")
-        return None, None
+        logger.error(f"[Dashboard] summary error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Dashboard summary failed")
 
-def init_milvus_collection():
-    """Initializes the collection if it doesn't exist, similar to rag-web-source2-hybrid.py"""
-    milvus_client = MilvusClient(
-        uri=config.CLUSTER_ENDPOINT,
-        token=config.ZILLIZ_API_KEY,
-    )
-    collection_name = config.MILVUS_COLLECTION
 
-    if milvus_client.has_collection(collection_name):
-        return milvus_client, collection_name
+@router.get("/dashboard/trends")
+def dashboard_trends(
+    start_date: str | None = None,
+    end_date: str | None = None,
+    current_admin: str = Depends(verify_admin),
+):
+    """Dashboard 趨勢圖：指定日期範圍的每日提問數、Token 消耗與獨立使用者數"""
+    from datetime import date as date_type
+    # 預設：過去 7 天
+    today = date_type.today()
+    try:
+        d_end = date_type.fromisoformat(end_date) if end_date else today
+        d_start = date_type.fromisoformat(start_date) if start_date else d_end - timedelta(days=6)
+    except ValueError:
+        d_end = today
+        d_start = today - timedelta(days=6)
 
-    print(f"Collection {collection_name} non-existent, creating it...")
-    schema = milvus_client.create_schema(
-        auto_id=False,
-        enable_dynamic_field=True
-    )
-    schema.add_field("id", DataType.INT64, is_primary=True)
-    schema.add_field("text", DataType.VARCHAR, max_length=5000, enable_analyzer=True)
-    schema.add_field("source_file", DataType.VARCHAR, max_length=256)
-    schema.add_field("source_path", DataType.VARCHAR, max_length=2048)
-    schema.add_field("source_url", DataType.VARCHAR, max_length=2048)  # [CODE-5] 專這个字段將 200 展小為 2048，与 source_path 一致，支援較長的 URL
-    schema.add_field("identity", DataType.ARRAY, element_type=DataType.VARCHAR, max_capacity=200, max_length=200, nullable=True)
-    schema.add_field("education_system", DataType.ARRAY, element_type=DataType.VARCHAR, max_capacity=200, max_length=200, nullable=True)
-    schema.add_field("category", DataType.ARRAY, element_type=DataType.VARCHAR, max_capacity=200, max_length=200, nullable=True)
-    schema.add_field("tags", DataType.ARRAY, element_type=DataType.VARCHAR, max_capacity=200, max_length=200, nullable=True)
-    schema.add_field("vector", DataType.FLOAT_VECTOR, dim=1536)
-    schema.add_field("text_sparse", DataType.SPARSE_FLOAT_VECTOR, description="Sparse vector")
+    # 安全限制：最多 365 天
+    if (d_end - d_start).days > 365:
+        d_start = d_end - timedelta(days=365)
+    if d_start > d_end:
+        d_start, d_end = d_end, d_start
 
-    bm25_function = Function(
-        name="text_bm25_emb",
-        input_field_names=["text"],
-        output_field_names=["text_sparse"],
-        function_type=FunctionType.BM25,
-    )
-    schema.add_function(bm25_function)
+    try:
+        with get_db_cursor() as (conn, cursor):
+            table = config.DB_TABLE_NAME
+            cursor.execute(f"""
+                SELECT
+                    timestamp::date AS day,
+                    COUNT(*) AS queries,
+                    COALESCE(SUM(total_tokens), 0) AS tokens,
+                    COUNT(DISTINCT user_id) AS unique_users,
+                    COALESCE(AVG(latency_ms), 0) AS avg_latency
+                FROM {table}
+                WHERE timestamp::date >= %s AND timestamp::date <= %s
+                GROUP BY day
+                ORDER BY day;
+            """, (d_start.isoformat(), d_end.isoformat()))
+            rows = cursor.fetchall()
+            labels = [r[0].strftime("%m/%d") for r in rows]
+            queries = [r[1] for r in rows]
+            tokens = [int(r[2]) for r in rows]
+            unique_users = [r[3] for r in rows]
+            avg_latency = [round(float(r[4]), 1) for r in rows]
 
-    milvus_client.create_collection(
-        collection_name=collection_name,
-        schema=schema,
-        consistency_level="Bounded"
-    )
+            return {
+                "status": "success",
+                "data": {
+                    "labels": labels,
+                    "queries": queries,
+                    "tokens": tokens,
+                    "unique_users": unique_users,
+                    "avg_latency": avg_latency,
+                }
+            }
+    except Exception as e:
+        logger.error(f"[Dashboard] trends error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Dashboard trends failed")
 
-    index_params = milvus_client.prepare_index_params()
-    index_params.add_index(
-        field_name="vector", index_name="vector_index", 
-        index_type="AUTOINDEX", metric_type="COSINE"
-    )
-    index_params.add_index(
-        field_name="text_sparse", index_name="text_sparse_index",
-        index_type="SPARSE_INVERTED_INDEX", metric_type="BM25",
-        params={"inverted_index_algo": "DAAT_MAXSCORE"}
-    )
-    milvus_client.create_index(collection_name=collection_name, index_params=index_params)
-    milvus_client.load_collection(collection_name=collection_name)
-    
-    return milvus_client, collection_name
+
+@router.get("/dashboard/recent")
+def dashboard_recent(limit: int = 20, current_admin: str = Depends(verify_admin)):
+    """Dashboard 近期對話抽查：最近 N 筆對話紀錄"""
+    if limit < 1 or limit > 100:
+        limit = 20
+    try:
+        with get_db_cursor() as (conn, cursor):
+            table = config.DB_TABLE_NAME
+            cursor.execute(f"""
+                SELECT id, timestamp, question, answer, latency_ms, total_tokens, feedback_type
+                FROM {table}
+                ORDER BY timestamp DESC
+                LIMIT %s;
+            """, (limit,))
+            rows = cursor.fetchall()
+            result = []
+            for r in rows:
+                result.append({
+                    "id": r[0],
+                    "timestamp": r[1].isoformat() if r[1] else None,
+                    "question": r[2] or "",
+                    "answer": (r[3] or "")[:200],  # 節錄前 200 字
+                    "latency_ms": round(float(r[4] or 0), 1),
+                    "total_tokens": int(r[5] or 0),
+                    "feedback_type": r[6],
+                })
+            return {"status": "success", "data": result}
+    except Exception as e:
+        logger.error(f"[Dashboard] recent error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Dashboard recent failed")
 
 # --- Endpoints ---
 
@@ -246,9 +278,44 @@ async def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends
         )
     access_token_expires = timedelta(minutes=config.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
-        data={"sub": config.ADMIN_USERNAME}, expires_delta=access_token_expires
+        data={"sub": config.ADMIN_USERNAME}, expires_delta=access_token_expires, token_type="access"
     )
-    return {"access_token": access_token, "token_type": "bearer"}
+    
+    refresh_token_expires = timedelta(days=config.REFRESH_TOKEN_EXPIRE_DAYS)
+    refresh_token = create_access_token(
+        data={"sub": config.ADMIN_USERNAME}, expires_delta=refresh_token_expires, token_type="refresh"
+    )
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer"
+    }
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
+
+@router.post("/refresh")
+@limiter.limit("10/minute")
+async def refresh_token(request: Request, refresh_request: RefreshTokenRequest):
+    credentials_exception = HTTPException(
+        status_code=401,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(refresh_request.refresh_token, config.JWT_SECRET_KEY, algorithms=[config.ALGORITHM])
+        username: str = payload.get("sub")
+        token_type: str = payload.get("type")
+        if username is None or username != config.ADMIN_USERNAME or token_type != "refresh":
+            raise credentials_exception
+            
+        access_token_expires = timedelta(minutes=config.ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = create_access_token(
+            data={"sub": config.ADMIN_USERNAME}, expires_delta=access_token_expires, token_type="access"
+        )
+        return {"access_token": access_token, "token_type": "bearer"}
+    except jwt.InvalidTokenError:
+        raise credentials_exception
 
 def _parse_json_array(value):
     """Safely parse a JSON string into a list. Returns [] on failure."""
@@ -369,23 +436,7 @@ def extract_scholarship_info(request: ExtractRequest, current_admin: str = Depen
     else:
         content_to_process = request.text
         
-    system_prompt = """
-    你是一個獎學金資訊擷取的專家助理。請從收到的內容中提取所需的資訊並以 JSON 格式回傳。
-    請提取以下欄位：
-    - title (名稱)
-    - link (網址 - 若內容有提供的話)
-    - category (衣珠類別，例如: "生活無憂", 如果沒有請寫 "")
-    - education_system (學制：陣列，例如 ["大學部", "研究所"])
-    - tags (類別/種類：陣列，例如 ["減免", "助學金"])
-    - identity (身分：陣列，例如 ["中低收入戶", "低收入戶", "原住民"])
-    - amount_summary (金額說明)
-    - description (介紹 - 簡要描述)
-    - application_date_text (申請日期)
-    - contact (聯絡人)
-    - markdown_content (請把所有資訊整理成一篇詳細的 Markdown 文章，用於存入知識庫。文章應該包含所有重要細節與資格條件)
-    
-    回傳的 JSON 需要包含上述 key 值。不要回傳 markdown 代碼塊格式，只需回傳合法的 JSON 字串。
-    """
+    system_prompt = PROMPTS['zh']['extraction_system']
     
     try:
         response = openai_client.chat.completions.create(
