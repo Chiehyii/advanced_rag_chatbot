@@ -53,7 +53,7 @@ async def _translate_to_zh(text: str) -> str:
             )},
             {"role": "user", "content": text}
         ],
-        # temperature=0.0,
+        temperature=0.0,
         max_completion_tokens=500,
     )
     translated = response.choices[0].message.content.strip()
@@ -89,7 +89,7 @@ async def _rephrase_question_with_history(history: list, question: str, lang: st
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        # temperature=0.0,
+        temperature=0.0,
         max_completion_tokens=800,
     )
     rephrased_question = response.choices[0].message.content.strip()
@@ -132,7 +132,7 @@ async def generate_suggested_replies(question: str, context_text: str, lang: str
             {"role": "user", "content": f"User's incoming question: {question}\n\nReference Context:\n{context_text}"}
         ],
         response_format=SuggestedReplies,
-        # temperature=0.7,
+        temperature=0.7,
         max_completion_tokens=800,
     )
     return response.choices[0].message.parsed.replies
