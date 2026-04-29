@@ -43,20 +43,18 @@ async def get_embedding(text):
     )
     return resp.data[0].embedding
 
-async def retrieve_context(question: str, expr: str, lang: str = 'zh', top_k: int = 7):
-    """根據問題進行混合檢索 (Dense + Sparse) + 過濾"""
+async def retrieve_context(question: str, question_for_retrieval: str, embedding: list[float], expr: str, top_k: int = 7):
+    """根據問題進行混合檢索 (Dense + Sparse) + 過濾
+
+    question: 原始（重述後）問題，用於 cross-encoder scoring
+    question_for_retrieval: 翻譯後問題（英文時為中文譯文），用於 BM25 sparse search
+    embedding: 預先計算好的 dense embedding
+    """
     from pymilvus import AnnSearchRequest, RRFRanker
 
-    # 1. 若使用者以英文提問，先翻成中文
-    if lang == 'en':
-        question_for_retrieval = await _translate_to_zh(question)
-    else:
-        question_for_retrieval = question
+    question_dense_embedding = embedding
 
-    # 2. 產生問題的向量 (Dense) — 使用原始問題
-    question_dense_embedding = await get_embedding(question)
-
-    # 3. 執行混合檢索
+    # 執行混合檢索
     dense_search_params = {"metric_type": "COSINE", "params": {"nprobe": 10}}
     dense_req = AnnSearchRequest(
         data=[question_dense_embedding],
@@ -228,11 +226,12 @@ async def generate_answer_stream(question: str, cleaned_contexts: list, lang: st
         if fname not in source_url_map and c.get('source_url'):
             source_url_map[fname] = c.get('source_url')
 
-    context_for_llm = ""
+    distinct_source_count = len(grouped)
+    context_for_llm = f"【系統資訊：本次共檢索到來自 {distinct_source_count} 個不同獎學金/補助來源的文件】\n"
     for idx, (fname, texts) in enumerate(grouped.items(), 1):
         title = fname.replace('.md', '').replace('.txt', '')
         url = source_url_map.get(fname, '')
-        
+
         context_for_llm += f"\n---\n[文件 {idx}]\n來源名稱: {title}\n"
         if url:
             context_for_llm += f"來源網址: {url}\n"
@@ -248,7 +247,7 @@ async def generate_answer_stream(question: str, cleaned_contexts: list, lang: st
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ],
-        # temperature=0.0,
+        temperature=0.0,
         # max_completion_tokens=3000,
         stream=True,
         stream_options={"include_usage": True},
@@ -298,7 +297,7 @@ async def _handle_small_talk_branch(rephrased_question: str, lang: str, usage_da
             {"role": "system", "content": PROMPTS[lang]['small_talk_system']},
             {"role": "user", "content": rephrased_question}
         ],
-        # temperature=0.7,
+        temperature=0.7,
         # max_completion_tokens=1000,
         # reasoning_effort="minimal",
         stream=True,
@@ -330,41 +329,80 @@ async def stream_chat_pipeline(question: str, history: list | None = None, lang:
     usage_data = {}
     stream_completed = False
 
+    async def _maybe_translate(text: str) -> str:
+        """英文問題翻成中文供 BM25 使用；中文問題直接回傳。"""
+        if lang == 'en':
+            return await _translate_to_zh(text)
+        return text
+
     try:
         user_msg_count = sum(1 for msg in (history or []) if msg.get('role') == 'user')
-        
-        if user_msg_count > 1:
+
+        if user_msg_count >= 1:
             rephrased_question = await _rephrase_question_with_history(history, question, lang=lang)
         else:
             rephrased_question = question
             logger.info("[Rephrase] Skipped rephrasing because this is the first user query.")
-        
+
         logger.info(f"[Question] Final question: {rephrased_question} (Original: {original_question})")
 
+        # --- 並行取得：意圖分析 / 翻譯 / embedding ---
+        # rephrase 完成後，三者互相獨立，可以同時發出 API 請求，
+        # 避免串行等待造成 ~600-1000ms 的額外延遲。
         if title_filter and len(title_filter) > 0:
             intent = "scholarship"
             safe_titles = [t.replace('"', '\\"') for t in title_filter[:3]]
             title_exprs = ", ".join([f'"{t}.md"' for t in safe_titles])
             expr = f"source_file in [{title_exprs}]"
             logger.info(f"[Title Filter] User selected tags: {title_filter} → Milvus expr: {expr}")
-            
+
             title_str = "、".join(title_filter[:3]) if lang == 'zh' else ", ".join(title_filter[:3])
             prefix = f"關於「{title_str}」：" if lang == 'zh' else f"Regarding '{title_str}': "
             rephrased_question = prefix + rephrased_question
             logger.info(f"[Title Filter] Injected tags into question: {rephrased_question}")
+
+            # title_filter 已知 intent，只需並行 translate + embed
+            question_for_retrieval, embedding = await asyncio.gather(
+                _maybe_translate(rephrased_question),
+                get_embedding(rephrased_question),
+            )
         else:
-            try:
-                intent, expr = await analyze_query(rephrased_question, lang=lang)
-                logger.info(f"[Intent] Intent: {intent}, Expr(filter): {expr}")
-            except Exception as analyze_err:
-                logger.warning(f"[Intent] analyze_query failed ({type(analyze_err).__name__}), falling back to unfiltered RAG search.")
+            # 並行：analyze_query + translate + embed
+            results = await asyncio.gather(
+                analyze_query(rephrased_question, lang=lang),
+                _maybe_translate(rephrased_question),
+                get_embedding(rephrased_question),
+                return_exceptions=True,
+            )
+
+            # analyze_query 結果
+            if isinstance(results[0], Exception):
+                logger.warning(f"[Intent] analyze_query failed ({type(results[0]).__name__}), falling back to unfiltered RAG search.")
                 intent, expr = "scholarship", ""
+            else:
+                intent, expr = results[0]
+                logger.info(f"[Intent] Intent: {intent}, Expr(filter): {expr}")
+
+            # 翻譯結果（失敗時 fallback 回原文）
+            question_for_retrieval = rephrased_question if isinstance(results[1], Exception) else results[1]
+            if isinstance(results[1], Exception):
+                logger.warning(f"[Translate] Translation failed ({type(results[1]).__name__}), using original question.")
+
+            # embedding 結果（失敗則直接拋出，無法繼續檢索）
+            if isinstance(results[2], Exception):
+                raise results[2]
+            embedding = results[2]
 
         cleaned_contexts = []
 
         if intent != 'other':
             logger.info(f"[Pipeline] Intent is '{intent}', retrieving documents (Milvus)...")
-            raw_contexts = await retrieve_context(rephrased_question, expr=expr, lang=lang)
+            raw_contexts = await retrieve_context(
+                rephrased_question,
+                question_for_retrieval=question_for_retrieval,
+                embedding=embedding,
+                expr=expr,
+            )
             cleaned_contexts = clean_retrieved_contexts(raw_contexts)
         else:
             logger.info(f"[Pipeline] Intent is '{intent}', skipping retrieval.")
