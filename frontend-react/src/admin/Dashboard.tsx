@@ -286,7 +286,7 @@ export function Dashboard({ onUnauthorized }: DashboardProps) {
                             <YAxis tick={{ fontSize: 12 }} />
                             <Tooltip
                                 contentStyle={{ borderRadius: 10, border: 'none', boxShadow: '0 4px 16px rgba(0,0,0,0.12)' }}
-                                formatter={(value: number) => [value.toLocaleString(), 'Tokens']}
+                                formatter={(value: number | string | any) => [Number(value || 0).toLocaleString(), 'Tokens']}
                             />
                             <Bar dataKey="Tokens" fill="url(#tokenGradient)" radius={[6, 6, 0, 0]} />
                             <defs>
