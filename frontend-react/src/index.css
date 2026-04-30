@@ -599,8 +599,11 @@ body {
   font-weight: 600;
 }
 
-.mobile-toggle-icon {
-  display: none;
+/* Hidden on desktop */
+.mobile-toggle-icon,
+.mobile-source-toggle-btn,
+.mobile-inline-contexts {
+  display: none !important;
 }
 
 .context-cards-list {
@@ -1186,20 +1189,22 @@ body {
     align-self: stretch;
   }
 
-  .mobile-toggle-icon {
-    display: flex;
-    color: var(--text-muted);
+  .desktop-only-contexts {
+    display: none !important;
   }
 
-  .contexts-header {
-    cursor: pointer;
-    padding: 8px 0;
-    margin-bottom: 0;
-    user-select: none;
-    -webkit-tap-highlight-color: transparent;
+  .mobile-source-toggle-btn {
+    display: inline-flex !important;
   }
 
-  .contexts.mobile-collapsed .context-cards-list {
+  .mobile-inline-contexts {
+    display: flex !important;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .mobile-inline-contexts .context-card-text {
     display: none;
   }
 

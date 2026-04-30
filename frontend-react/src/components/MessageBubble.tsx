@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Message, Language } from '../types';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import { ThumbsUp, ThumbsDown, Globe, ChevronDown, ChevronRight } from 'lucide-react';
+import { ThumbsUp, ThumbsDown, Globe, ChevronDown, ChevronRight, BookOpen } from 'lucide-react';
 import { translations } from '../App';
 
 interface MessageBubbleProps {
@@ -62,10 +62,53 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
       `;
     });
 
-    // 3. 確保 DOMPurify 允許我們新增的屬性 (target, rel, class)
     return {
       __html: DOMPurify.sanitize(processedHtml, { ADD_ATTR: ['target', 'rel', 'class'] })
     };
+  };
+
+  const renderContexts = (visibilityClass: string) => {
+    if (!contexts || contexts.length === 0 || isStreaming) return null;
+    return (
+      <div className={`contexts ${visibilityClass} ${isMobileExpanded ? 'mobile-expanded' : 'mobile-collapsed'}`}>
+        <div className="contexts-header" onClick={() => setIsMobileExpanded(!isMobileExpanded)}>
+          <h4>{t.reference_title}</h4>
+          <span className="mobile-toggle-icon">
+            {isMobileExpanded ? <ChevronDown size={18} strokeWidth={1.5} /> : <ChevronRight size={18} strokeWidth={1.5} />}
+          </span>
+        </div>
+        <div className="context-cards-list">
+          {contexts.map((ctx, idx) => {
+            const url = sanitizeUrl(ctx.source_url);
+            const domain = url !== '#' ? new URL(url).hostname : '';
+            const displaySnippet = (ctx.text || '').replace(/<[^>]*>?/gm, '');
+
+            return (
+              <a
+                key={idx}
+                id={`context-card-${logId || 'temp'}-${idx + 1}`}
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="context-card-link"
+                title={ctx.source_file || 'Unknown'}
+              >
+                <div className="context-card">
+                  <div className="context-card-title">{ctx.source_file || t.unknown_source}</div>
+                  <div className="context-card-text">{displaySnippet}</div>
+                  <div className="context-card-url" style={{ color: '#666', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    {domain ? (
+                      <img src={`https://www.google.com/s2/favicons?sz=64&domain=${encodeURIComponent(domain)}`} alt="icon" style={{ width: 16, height: 16, borderRadius: 2 }} />
+                    ) : <Globe size={16} color="#888" />}
+                    <span className="url-text">{url}</span>
+                  </div>
+                </div>
+              </a>
+            );
+          })}
+        </div>
+      </div>
+    );
   };
 
   if (role === 'user') {
@@ -110,6 +153,44 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
                 >
                   <ThumbsDown size={16} color={feedbackState === 'dislike' ? '#ea4335' : '#adb1b9'} fill={feedbackState === 'dislike' ? '#ea4335' : 'none'} />
                 </button>
+                {contexts && contexts.length > 0 && (
+                  <button
+                    className={`feedback-btn mobile-source-toggle-btn ${isMobileExpanded ? 'active' : ''}`}
+                    onClick={() => setIsMobileExpanded(!isMobileExpanded)}
+                    title={t.reference_title}
+                  >
+                    <BookOpen size={16} color={isMobileExpanded ? 'var(--link-color)' : '#adb1b9'} strokeWidth={1.5} />
+                  </button>
+                )}
+              </div>
+            )}
+            {isMobileExpanded && contexts && contexts.length > 0 && !isStreaming && (
+              <div className="mobile-inline-contexts">
+                {contexts.map((ctx, idx) => {
+                  const url = sanitizeUrl(ctx.source_url);
+                  const domain = url !== '#' ? new URL(url).hostname : '';
+                  return (
+                    <a
+                      key={idx}
+                      id={`context-card-mobile-${logId || 'temp'}-${idx + 1}`}
+                      href={url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="context-card-link"
+                      title={ctx.source_file || 'Unknown'}
+                    >
+                      <div className="context-card">
+                        <div className="context-card-title">{ctx.source_file || t.unknown_source}</div>
+                        <div className="context-card-url" style={{ color: '#666', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          {domain ? (
+                            <img src={`https://www.google.com/s2/favicons?sz=64&domain=${encodeURIComponent(domain)}`} alt="icon" style={{ width: 16, height: 16, borderRadius: 2 }} />
+                          ) : <Globe size={16} color="#888" />}
+                          <span className="url-text">{url}</span>
+                        </div>
+                      </div>
+                    </a>
+                  );
+                })}
               </div>
             )}
             {chips && chips.length > 0 && !isStreaming && (
@@ -122,47 +203,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
               </div>
             )}
           </div>
-          {contexts && contexts.length > 0 && !isStreaming && (
-            <div className={`contexts ${isMobileExpanded ? 'mobile-expanded' : 'mobile-collapsed'}`}>
-              <div className="contexts-header" onClick={() => setIsMobileExpanded(!isMobileExpanded)}>
-                <h4>{t.reference_title}</h4>
-                <span className="mobile-toggle-icon">
-                  {isMobileExpanded ? <ChevronDown size={18} strokeWidth={1.5} /> : <ChevronRight size={18} strokeWidth={1.5} />}
-                </span>
-              </div>
-              <div className="context-cards-list">
-                {contexts.map((ctx, idx) => {
-                  const url = sanitizeUrl(ctx.source_url);  // [SEC-5]
-                  const domain = url !== '#' ? new URL(url).hostname : '';
-                  const displaySnippet = (ctx.text || '').replace(/<[^>]*>?/gm, '');
-
-                  return (
-                    // 4. 在 <a> 標籤上加入動態 id，注意這裡的 index 是 idx + 1，因為標籤是從 [1] 開始
-                    <a
-                      key={idx}
-                      id={`context-card-${logId || 'temp'}-${idx + 1}`}
-                      href={url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="context-card-link"
-                      title={ctx.source_file || 'Unknown'}
-                    >
-                      <div className="context-card">
-                        <div className="context-card-title">{ctx.source_file || t.unknown_source}</div>
-                        <div className="context-card-text">{displaySnippet}</div>
-                        <div className="context-card-url" style={{ color: '#666', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          {domain ? (
-                            <img src={`https://www.google.com/s2/favicons?sz=64&domain=${encodeURIComponent(domain)}`} alt="icon" style={{ width: 16, height: 16, borderRadius: 2 }} />
-                          ) : <Globe size={16} color="#888" />}
-                          <span className="url-text">{url}</span>
-                        </div>
-                      </div>
-                    </a>
-                  );
-                })}
-              </div>
-            </div>
-          )}
+          {renderContexts('desktop-only-contexts')}
         </div>
       </div>
     </div>
