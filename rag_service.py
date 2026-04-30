@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from logger import get_logger
-from llm_service import _translate_to_zh, _rephrase_question_with_history, generate_suggested_replies
+from llm_service import _translate_to_zh, _rephrase_question_with_history #, generate_suggested_replies
 from db_repository import clean_retrieved_contexts, log_to_db
 
 logger = get_logger(__name__)
@@ -261,10 +261,6 @@ async def generate_answer_stream(question: str, cleaned_contexts: list, lang: st
 
 async def _handle_rag_branch(rephrased_question: str, cleaned_contexts: list, lang: str, usage_data: dict):
     logger.info(f"[RAG] RAG path: {len(cleaned_contexts)} relevant documents found.")
-    context_text_for_chips = "\\n".join([c.get('text', '') for c in cleaned_contexts][:3])
-    chips_task = asyncio.create_task(
-        generate_suggested_replies(rephrased_question, context_text_for_chips, lang=lang)
-    )
 
     llm_stream = generate_answer_stream(rephrased_question, cleaned_contexts, lang=lang, usage_data=usage_data)
     
@@ -284,8 +280,7 @@ async def _handle_rag_branch(rephrased_question: str, cleaned_contexts: list, la
     contexts_for_logging = unique_display_contexts
     result_data = {"contexts": unique_display_contexts}
     
-    chips = await chips_task
-    result_data["chips"] = chips
+    result_data["chips"] = []
     
     yield {"type": "branch_done", "full_answer": full_answer, "contexts_for_logging": contexts_for_logging, "result_data": result_data}
 
@@ -312,8 +307,7 @@ async def _handle_small_talk_branch(rephrased_question: str, lang: str, usage_da
             full_answer += content
             yield {"type": "content", "data": content}
     
-    chips = await generate_suggested_replies(rephrased_question, full_answer, lang=lang)
-    result_data = {"contexts": [], "chips": chips}
+    result_data = {"contexts": [], "chips": []}
     yield {"type": "branch_done", "full_answer": full_answer, "contexts_for_logging": [], "result_data": result_data}
 
 async def stream_chat_pipeline(question: str, history: list | None = None, lang: str = 'zh', title_filter: list[str] | None = None, request_id: str | None = None, session_id: str | None = None, user_id: str | None = None):

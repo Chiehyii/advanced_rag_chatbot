@@ -102,37 +102,37 @@ async def _rephrase_question_with_history(history: list, question: str, lang: st
 class SuggestedReplies(BaseModel):
     replies: list[str]
 
-def _suggested_replies_fallback(retry_state):
-    logger.warning(f"[Rephrase] Failed to predict follow-up questions after {retry_state.attempt_number} attempts: {retry_state.outcome.exception()}")
-    return []
+# def _suggested_replies_fallback(retry_state):
+#     logger.warning(f"[Rephrase] Failed to predict follow-up questions after {retry_state.attempt_number} attempts: {retry_state.outcome.exception()}")
+#     return []
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=8), retry_error_callback=_suggested_replies_fallback)
-async def generate_suggested_replies(question: str, context_text: str, lang: str = 'zh') -> list[str]:
-    system_prompt = (
-        "You are a helpful assistant predicting the user's next questions. Rules:\n"
-        "1. Generate exactly 3 short follow-up questions (under 15 words each) based on the provided reference context.\n"
-        "2. If the context mentions specific scholarships, the questions MUST target those specific scholarships by name (e.g., 'What is the exact deadline for Scholarship X?').\n"
-        "3. DO NOT generate broad or generic questions.\n"
-        "4. CRITICAL: DO NOT ask questions that the bot cannot answer, such as asking for someone's personal email, direct phone number, or physical office address."
-    )
-    if lang == 'zh':
-        system_prompt = (
-            "你是一個預測使用者意圖的貼心助教。請根據使用者的問題以及檢索到的「參考資料(Context)」，產生 3 個使用者接下來最可能追問的「短問題」。\n"
-            "【嚴格規則】\n"
-            "1. 每個問題必須極度簡短且口語（15字以內）。\n"
-            "2. 如果參考資料中提到了多項獎學金，請**挑其中一個最有代表性的獎學金**名稱來發問（例如：「ＯＯ獎學金的申請表在哪裡下載？」），絕對不要問籠統廣泛的問題（例如：「有哪些推薦的獎學金？」）。\n"
-            "3. **絕對不可以**問「機器人無法回答的問題」，例如：承辦人的信箱是什麼？全球處的地址在哪裡？聯絡電話是幾號？（因為隱私關係，知識庫通常缺乏這些聯絡細節）。\n"
-            "4. 建議詢問：該獎學金的應備文件、申請資格細節、或是截止日期。"
-        )
+# @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=8), retry_error_callback=_suggested_replies_fallback)
+# async def generate_suggested_replies(question: str, context_text: str, lang: str = 'zh') -> list[str]:
+#     system_prompt = (
+#         "You are a helpful assistant predicting the user's next questions. Rules:\n"
+#         "1. Generate exactly 3 short follow-up questions (under 15 words each) based on the provided reference context.\n"
+#         "2. If the context mentions specific scholarships, the questions MUST target those specific scholarships by name (e.g., 'What is the exact deadline for Scholarship X?').\n"
+#         "3. DO NOT generate broad or generic questions.\n"
+#         "4. CRITICAL: DO NOT ask questions that the bot cannot answer, such as asking for someone's personal email, direct phone number, or physical office address."
+#     )
+#     if lang == 'zh':
+#         system_prompt = (
+#             "你是一個預測使用者意圖的貼心助教。請根據使用者的問題以及檢索到的「參考資料(Context)」，產生 3 個使用者接下來最可能追問的「短問題」。\n"
+#             "【嚴格規則】\n"
+#             "1. 每個問題必須極度簡短且口語（15字以內）。\n"
+#             "2. 如果參考資料中提到了多項獎學金，請**挑其中一個最有代表性的獎學金**名稱來發問（例如：「ＯＯ獎學金的申請表在哪裡下載？」），絕對不要問籠統廣泛的問題（例如：「有哪些推薦的獎學金？」）。\n"
+#             "3. **絕對不可以**問「機器人無法回答的問題」，例如：承辦人的信箱是什麼？全球處的地址在哪裡？聯絡電話是幾號？（因為隱私關係，知識庫通常缺乏這些聯絡細節）。\n"
+#             "4. 建議詢問：該獎學金的應備文件、申請資格細節、或是截止日期。"
+#         )
     
-    response = await openai_client.beta.chat.completions.parse(
-        model=config.OPENAI_MODEL_NAME,  # [OPT-2] 使用 config 而非硬編碼 "gpt-4o-mini"
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"User's incoming question: {question}\n\nReference Context:\n{context_text}"}
-        ],
-        response_format=SuggestedReplies,
-        temperature=0.7,
-        max_completion_tokens=800,
-    )
-    return response.choices[0].message.parsed.replies
+#     response = await openai_client.beta.chat.completions.parse(
+#         model=config.OPENAI_MODEL_NAME,  # [OPT-2] 使用 config 而非硬編碼 "gpt-4o-mini"
+#         messages=[
+#             {"role": "system", "content": system_prompt},
+#             {"role": "user", "content": f"User's incoming question: {question}\n\nReference Context:\n{context_text}"}
+#         ],
+#         response_format=SuggestedReplies,
+#         temperature=0.7,
+#         max_completion_tokens=800,
+#     )
+#     return response.choices[0].message.parsed.replies

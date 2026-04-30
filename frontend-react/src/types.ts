@@ -15,6 +15,7 @@ export interface Message {
 }
 
 export type Language = 'zh' | 'en';
+export type Theme = 'system' | 'light' | 'dark';
 
 export interface ScholarshipTag {
   title: string;

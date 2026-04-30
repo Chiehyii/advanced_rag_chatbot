@@ -1,19 +1,21 @@
 import React, { useState } from 'react';
-import { Globe, HelpCircle, ChevronRight, Menu, X, ExternalLink, BookOpen } from 'lucide-react';
-import { Language } from '../types';
+import { Globe, HelpCircle, ChevronRight, Menu, X, ExternalLink, BookOpen, Settings, Moon, Sun, Monitor } from 'lucide-react';
+import { Language, Theme } from '../types';
 import { translations } from '../App';
 
 interface DesktopSidebarProps {
   language: Language;
   onLanguageChange: (lang: Language) => void;
+  theme: Theme;
+  onThemeChange: (theme: Theme) => void;
   onHelp: () => void;
   onTour: () => void;
 }
 
 const SidebarContent: React.FC<DesktopSidebarProps & { onClose?: () => void }> = ({
-  language, onLanguageChange, onHelp, onTour, onClose
+  language, onLanguageChange, theme, onThemeChange, onHelp, onTour, onClose
 }) => {
-  const [langOpen, setLangOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const t = translations[language];
 
   return (
@@ -36,30 +38,60 @@ const SidebarContent: React.FC<DesktopSidebarProps & { onClose?: () => void }> =
           <span className="sidebar-nav-label">{(t as any).homepage_button || '首頁'}</span>
         </button>
 
-        {/* Language switcher */}
+        {/* Settings switcher */}
         <div className="sidebar-nav-item-wrap">
           <button
             type="button"
             className="sidebar-nav-item"
-            onClick={() => setLangOpen(prev => !prev)}
-            title="Language"
+            onClick={() => setSettingsOpen(prev => !prev)}
+            title={(t as any).settings_button || 'Settings'}
           >
-            <Globe size={20} strokeWidth={1.5} />
-            <span className="sidebar-nav-label">Language</span>
-            <ChevronRight size={14} strokeWidth={1.5} className={`sidebar-chevron ${langOpen ? 'open' : ''}`} />
+            <Settings size={20} strokeWidth={1.5} />
+            <span className="sidebar-nav-label">{(t as any).settings_button || 'Settings'}</span>
+            <ChevronRight size={14} strokeWidth={1.5} className={`sidebar-chevron ${settingsOpen ? 'open' : ''}`} />
           </button>
-          {langOpen && (
+          {settingsOpen && (
             <div className="sidebar-sub-menu">
-              {(['zh', 'en'] as Language[]).map(lang => (
-                <button
-                  key={lang}
-                  type="button"
-                  className={`sidebar-sub-item ${language === lang ? 'active' : ''}`}
-                  onClick={() => { onLanguageChange(lang); setLangOpen(false); if (onClose) onClose(); }}
-                >
-                  {lang === 'zh' ? '繁體中文' : 'English'}
-                </button>
-              ))}
+              {/* Language Section */}
+              <div className="sidebar-sub-menu-section">
+                <div className="sidebar-sub-menu-title">
+                  <Globe size={14} /> <span>Language</span>
+                </div>
+                {(['zh', 'en'] as Language[]).map(lang => (
+                  <button
+                    key={lang}
+                    type="button"
+                    className={`sidebar-sub-item ${language === lang ? 'active' : ''}`}
+                    onClick={() => { onLanguageChange(lang); setSettingsOpen(false); if (onClose) onClose(); }}
+                  >
+                    {lang === 'zh' ? '繁體中文' : 'English'}
+                  </button>
+                ))}
+              </div>
+              
+              {/* Theme Section */}
+              <div className="sidebar-sub-menu-section">
+                <div className="sidebar-sub-menu-title">
+                  <Monitor size={14} /> <span>{(t as any).theme_title || 'Theme'}</span>
+                </div>
+                {(['system', 'light', 'dark'] as Theme[]).map(th => {
+                  const Icon = th === 'dark' ? Moon : (th === 'light' ? Sun : Monitor);
+                  const label = th === 'dark' ? ((t as any).theme_dark || 'Dark') : 
+                                th === 'light' ? ((t as any).theme_light || 'Light') : 
+                                ((t as any).theme_system || 'System');
+                  return (
+                    <button
+                      key={th}
+                      type="button"
+                      className={`sidebar-sub-item ${theme === th ? 'active' : ''}`}
+                      onClick={() => { onThemeChange(th); setSettingsOpen(false); if (onClose) onClose(); }}
+                    >
+                      <Icon size={14} style={{ marginRight: '6px' }} />
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           )}
         </div>

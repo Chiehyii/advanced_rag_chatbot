@@ -17,10 +17,13 @@
   --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --button-able: #adb1b9;
   --button-disabled: #e4e4e4;
+  --scrollbar-thumb: rgba(0, 0, 0, 0.18);
+  --scrollbar-thumb-hover: rgba(0, 0, 0, 0.3);
+  --scrollbar-track: transparent;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --body-bg: #121212;
     --chat-bg: #1e1e1e;
     --user-msg-bg: #313131;
@@ -38,7 +41,33 @@
     --table-even-bg: #1a1a1a;
     --button-able: #e0e0e0;
     --button-disabled: #636363;
+    --scrollbar-thumb: rgba(255, 255, 255, 0.12);
+    --scrollbar-thumb-hover: rgba(255, 255, 255, 0.22);
+    --scrollbar-track: transparent;
   }
+}
+
+[data-theme="dark"] {
+  --body-bg: #121212;
+  --chat-bg: #1e1e1e;
+  --user-msg-bg: #313131;
+  --bot-msg-bg: #2d2d2d;
+  --input-bg: #1e1e1e;
+  --text-color: #e4e4e4;
+  --text-muted: #a0a0a0;
+  --border-color: #333333;
+  --link-color: #6294c0;
+  --button-bg: #333333;
+  --card-bg: #2a2a2a;
+  --card-hover-bg: #3a3a3a;
+  --card-text: #b0b0b0;
+  --table-header-bg: #313131;
+  --table-even-bg: #1a1a1a;
+  --button-able: #e0e0e0;
+  --button-disabled: #636363;
+  --scrollbar-thumb: rgba(255, 255, 255, 0.12);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.22);
+  --scrollbar-track: transparent;
 }
 
 body {
@@ -53,6 +82,27 @@ body {
   overflow-x: hidden;
   letter-spacing: 0.02em;
   line-height: 1.3;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+/* Global thin scrollbar (Webkit browsers) */
+*::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 10px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
 }
 
 #root {
@@ -186,7 +236,26 @@ body {
   margin: 4px 0 4px 46px;
   border-left: 2px solid var(--border-color);
   padding-left: 8px;
+  gap: 12px;
+}
+
+.sidebar-sub-menu-section {
+  display: flex;
+  flex-direction: column;
   gap: 2px;
+}
+
+.sidebar-sub-menu-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  opacity: 0.7;
+  padding: 4px 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 .sidebar-sub-item {
@@ -194,6 +263,8 @@ body {
   border: none;
   padding: 8px 12px;
   border-radius: 8px;
+  display: flex;
+  align-items: center;
   text-align: left;
   cursor: pointer;
   font-size: 0.9rem;
@@ -585,11 +656,25 @@ body {
   padding-bottom: 60px;
 }
 
+.contexts-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 5px;
+}
+
 .contexts h4 {
-  margin: 0 0 5px 0;
+  margin: 0;
   font-size: 0.9rem;
   color: var(--text-muted);
   font-weight: 600;
+}
+
+/* Hidden on desktop */
+.mobile-toggle-icon,
+.mobile-source-toggle-btn,
+.mobile-inline-contexts {
+  display: none !important;
 }
 
 .context-cards-list {
@@ -601,19 +686,6 @@ body {
   padding-right: 4px;
 }
 
-/* Custom scrollbar for context list */
-.context-cards-list::-webkit-scrollbar {
-  width: 6px;
-}
-
-.context-cards-list::-webkit-scrollbar-thumb {
-  background-color: #ddd;
-  border-radius: 3px;
-}
-
-.context-cards-list::-webkit-scrollbar-track {
-  background-color: transparent;
-}
 
 .context-card-link {
   text-decoration: none;
@@ -731,6 +803,7 @@ body {
   overflow: visible;
   box-shadow: 0 0 0 1px var(--border-color);
 }
+
 
 .bot-message th,
 .bot-message td {
@@ -1154,12 +1227,52 @@ body {
     /* Take full width on mobile */
   }
 
+  /* Make table horizontally scrollable on mobile without squishing columns */
+  .bot-message table {
+    display: block;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+  }
+  .bot-message th,
+  .bot-message td {
+    min-width: 85px;
+  }
+
   .contexts {
     width: 100%;
     /* Context cards take full width */
     position: static;
     /* Disable sticky positioning on vertical stack */
     align-self: stretch;
+  }
+
+  .desktop-only-contexts {
+    display: none !important;
+  }
+
+  .mobile-source-toggle-btn {
+    display: inline-flex !important;
+  }
+
+  .mobile-inline-contexts {
+    display: flex !important;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .mobile-inline-contexts .context-card-text {
+    display: none;
+  }
+
+  .context-cards-list {
+    max-height: none;
+    overflow-y: visible;
+  }
+
+  .context-card-text {
+    display: none;
   }
 
   #input-area {
@@ -1506,18 +1619,6 @@ a.inline-citation:hover sup {
   gap: 6px;
 }
 
-.filter-results-list::-webkit-scrollbar {
-  width: 6px;
-}
-
-.filter-results-list::-webkit-scrollbar-thumb {
-  background-color: #ccc;
-  border-radius: 3px;
-}
-
-.filter-results-list::-webkit-scrollbar-track {
-  background-color: transparent;
-}
 
 /* Result Card */
 .filter-card {

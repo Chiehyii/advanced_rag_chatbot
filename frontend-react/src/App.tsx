@@ -7,7 +7,7 @@ import { ScholarshipFilterModal } from './components/ScholarshipFilterModal';
 import { DesktopSidebar } from './components/DesktopSidebar';
 import { OnboardingTour, TourStep } from './components/OnboardingTour';
 import { Trash2 } from 'lucide-react';
-import { Message, Language, ScholarshipTag } from './types';
+import { Message, Language, ScholarshipTag, Theme } from './types';
 import './index.css';
 
 const AdminApp = React.lazy(() => import('./admin/AdminApp').then(module => ({ default: module.AdminApp })));
@@ -84,7 +84,12 @@ export const translations = {
     tour_step_clear_title: "🗑️ 清除對話",
     tour_step_clear_desc: "點擊此按鈕可清除所有聊天記錄，重新開始一段新的對話。",
     tour_step_response_title: "🤖 AI 回答",
-    tour_step_response_desc: "AI 回答會顯示在這裡。回答中的 [1][2] 標記可點擊查看引用來源；右側會顯示來源卡片，下方可對回答按讚或回報問題。"
+    tour_step_response_desc: "AI 回答會顯示在這裡。回答中的 [1][2] 標記可點擊查看引用來源；右側會顯示來源卡片，下方可對回答按讚或回報問題。",
+    settings_button: "設定",
+    theme_title: "主題",
+    theme_system: "預設",
+    theme_light: "亮色",
+    theme_dark: "暗色"
   },
   en: {
     welcome_title: "Hi! Ask me about scholarships!",
@@ -143,7 +148,12 @@ export const translations = {
     tour_step_clear_title: "🗑️ Clear Chat",
     tour_step_clear_desc: "Click this button to clear all chat history and start a fresh conversation.",
     tour_step_response_title: "🤖 AI Response",
-    tour_step_response_desc: "AI responses appear here. Inline [1][2] markers are clickable to view citation sources; source cards are shown on the right side. You can also like or report answers below each response."
+    tour_step_response_desc: "AI responses appear here. Inline [1][2] markers are clickable to view citation sources; source cards are shown on the right side. You can also like or report answers below each response.",
+    settings_button: "Settings",
+    theme_title: "Theme",
+    theme_system: "System",
+    theme_light: "Light",
+    theme_dark: "Dark"
   }
 };
 function App() {
@@ -156,7 +166,19 @@ function App() {
     }
   });
   const [language, setLanguage] = useState<Language>('zh');
+  const [theme, setTheme] = useState<Theme>(() => {
+    return (localStorage.getItem('tcu_theme') as Theme) || 'system';
+  });
   const [isLoading, setIsLoading] = useState(false);
+
+  useEffect(() => {
+    localStorage.setItem('tcu_theme', theme);
+    if (theme === 'system') {
+      document.documentElement.removeAttribute('data-theme');
+    } else {
+      document.documentElement.setAttribute('data-theme', theme);
+    }
+  }, [theme]);
   // --- 追蹤 ID ---
   const sessionId = useRef(getOrCreateId(sessionStorage, SESSION_ID_KEY)).current;
   const userId = useRef(getOrCreateId(localStorage, USER_ID_KEY)).current;
@@ -399,6 +421,8 @@ function App() {
             <DesktopSidebar
               language={language}
               onLanguageChange={setLanguage}
+              theme={theme}
+              onThemeChange={setTheme}
               onHelp={() => alert(t.help_alert)}
               onTour={() => setIsTourOpen(true)}
             />
