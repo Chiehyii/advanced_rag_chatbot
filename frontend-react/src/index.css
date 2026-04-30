@@ -1175,6 +1175,15 @@ body {
     align-self: stretch;
   }
 
+  .context-cards-list {
+    max-height: none;
+    overflow-y: visible;
+  }
+
+  .context-card-text {
+    display: none;
+  }
+
   #input-area {
     padding: 0;
 
