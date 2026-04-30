@@ -23,7 +23,7 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --body-bg: #121212;
     --chat-bg: #1e1e1e;
     --user-msg-bg: #313131;
@@ -45,6 +45,29 @@
     --scrollbar-thumb-hover: rgba(255, 255, 255, 0.22);
     --scrollbar-track: transparent;
   }
+}
+
+[data-theme="dark"] {
+  --body-bg: #121212;
+  --chat-bg: #1e1e1e;
+  --user-msg-bg: #313131;
+  --bot-msg-bg: #2d2d2d;
+  --input-bg: #1e1e1e;
+  --text-color: #e4e4e4;
+  --text-muted: #a0a0a0;
+  --border-color: #333333;
+  --link-color: #6294c0;
+  --button-bg: #333333;
+  --card-bg: #2a2a2a;
+  --card-hover-bg: #3a3a3a;
+  --card-text: #b0b0b0;
+  --table-header-bg: #313131;
+  --table-even-bg: #1a1a1a;
+  --button-able: #e0e0e0;
+  --button-disabled: #636363;
+  --scrollbar-thumb: rgba(255, 255, 255, 0.12);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.22);
+  --scrollbar-track: transparent;
 }
 
 body {
@@ -213,7 +236,26 @@ body {
   margin: 4px 0 4px 46px;
   border-left: 2px solid var(--border-color);
   padding-left: 8px;
+  gap: 12px;
+}
+
+.sidebar-sub-menu-section {
+  display: flex;
+  flex-direction: column;
   gap: 2px;
+}
+
+.sidebar-sub-menu-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  opacity: 0.7;
+  padding: 4px 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 .sidebar-sub-item {
@@ -221,6 +263,8 @@ body {
   border: none;
   padding: 8px 12px;
   border-radius: 8px;
+  display: flex;
+  align-items: center;
   text-align: left;
   cursor: pointer;
   font-size: 0.9rem;
