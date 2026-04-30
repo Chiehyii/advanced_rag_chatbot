@@ -732,6 +732,7 @@ body {
   box-shadow: 0 0 0 1px var(--border-color);
 }
 
+
 .bot-message th,
 .bot-message td {
   padding: 10px 12px;
@@ -1152,6 +1153,18 @@ body {
   .bot-left-col {
     max-width: 100%;
     /* Take full width on mobile */
+  }
+
+  /* Make table horizontally scrollable on mobile without squishing columns */
+  .bot-message table {
+    display: block;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+  }
+  .bot-message th,
+  .bot-message td {
+    min-width: 85px;
   }
 
   .contexts {
