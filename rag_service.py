@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from logger import get_logger
-from llm_service import _translate_to_zh, _rephrase_question_with_history, generate_suggested_replies
+from llm_service import _translate_to_zh, _rephrase_question_with_history #, generate_suggested_replies
 from db_repository import clean_retrieved_contexts, log_to_db
 
 logger = get_logger(__name__)

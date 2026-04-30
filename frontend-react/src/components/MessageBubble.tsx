@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Message, Language } from '../types';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import { ThumbsUp, ThumbsDown, Globe } from 'lucide-react';
+import { ThumbsUp, ThumbsDown, Globe, ChevronDown, ChevronRight } from 'lucide-react';
 import { translations } from '../App';
 
 interface MessageBubbleProps {
@@ -16,6 +16,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
   const { role, content, contexts, logId, chips, isStreaming } = message;
   const t = translations[language];
   const [feedbackState, setFeedbackState] = useState<'like' | 'dislike' | null>(null);
+  const [isMobileExpanded, setIsMobileExpanded] = useState(false);
 
   // [SEC-5] 使用 URL 建構子驗證協議，防止 javascript: / data: 等惡意 URL
   const sanitizeUrl = (raw: string | undefined | null): string => {
@@ -122,8 +123,13 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
             )}
           </div>
           {contexts && contexts.length > 0 && !isStreaming && (
-            <div className="contexts">
-              <h4>{t.reference_title}</h4>
+            <div className={`contexts ${isMobileExpanded ? 'mobile-expanded' : 'mobile-collapsed'}`}>
+              <div className="contexts-header" onClick={() => setIsMobileExpanded(!isMobileExpanded)}>
+                <h4>{t.reference_title}</h4>
+                <span className="mobile-toggle-icon">
+                  {isMobileExpanded ? <ChevronDown size={18} strokeWidth={1.5} /> : <ChevronRight size={18} strokeWidth={1.5} />}
+                </span>
+              </div>
               <div className="context-cards-list">
                 {contexts.map((ctx, idx) => {
                   const url = sanitizeUrl(ctx.source_url);  // [SEC-5]
