@@ -381,3 +381,125 @@ async def stream_chat_pipeline(question: str, history: list | None = None, lang:
             request_id, session_id, user_id, result_data
         )
         yield {"type": "final_data", "data": result_data}
+
+
+# ═══════════════════════════════════════════════════════════════
+# NEW: LangGraph Agent Pipeline
+# ═══════════════════════════════════════════════════════════════
+async def stream_agent_pipeline(
+    question: str,
+    history: list | None = None,
+    lang: str = "zh",
+    title_filter: list[str] | None = None,
+    request_id: str | None = None,
+    session_id: str | None = None,
+    user_id: str | None = None,
+):
+    """
+    LangGraph Agent 版本的對話 Pipeline。
+    產出與 stream_chat_pipeline 相同的 SSE event 格式，
+    可直接作為 /chat 端點的 drop-in replacement。
+    """
+    from langchain_core.messages import HumanMessage, AIMessage
+    from agent.graph import graph
+
+    start_time = time.time()
+    full_answer = ""
+    original_question = question
+    rephrased_question = question
+    contexts_for_logging = []
+    result_data = {}
+    stream_completed = False
+
+    try:
+        # 使用 session_id 作為 LangGraph 的 thread_id，實現跨輪次記憶
+        thread_id = session_id or "default"
+        config = {"configurable": {"thread_id": thread_id}}
+
+        # 組裝輸入 state：只傳入最新的 HumanMessage
+        # （LangGraph 的 MemorySaver + add_messages reducer 會自動合併歷史）
+        input_state = {
+            "messages": [HumanMessage(content=question)],
+            "lang": lang,
+            "title_filter": title_filter,
+            "request_id": request_id,
+            "session_id": session_id,
+            "user_id": user_id,
+        }
+
+        # 如果前端傳入 history 且 Graph 尚無 checkpoint（首次），需要預載歷史
+        # 這確保了從舊 pipeline 切換過來時，歷史不會丟失
+        graph_state = None
+        try:
+            graph_state = await asyncio.to_thread(
+                lambda: graph.get_state(config)
+            )
+        except Exception:
+            pass
+
+        has_checkpoint = graph_state and graph_state.values and graph_state.values.get("messages")
+
+        if not has_checkpoint and history and len(history) > 0:
+            # 首次：把前端傳入的 history 轉成 LangGraph messages 一併送入
+            pre_messages = []
+            for msg in history:
+                role = msg.get("role", "")
+                content = msg.get("content", "")
+                if role == "user":
+                    pre_messages.append(HumanMessage(content=content))
+                elif role == "assistant":
+                    pre_messages.append(AIMessage(content=content))
+            # 加上本次的問題
+            pre_messages.append(HumanMessage(content=question))
+            input_state["messages"] = pre_messages
+
+        # 執行 Graph
+        final_state = await graph.ainvoke(input_state, config)
+
+        # 從 final_state 中取得 AI 的最後一則回覆
+        ai_messages = [m for m in final_state.get("messages", []) if isinstance(m, AIMessage)]
+        if ai_messages:
+            full_answer = ai_messages[-1].content
+        else:
+            full_answer = PROMPTS[lang]["no_result_answer"]
+
+        # 取得檢索到的文件
+        cleaned_contexts = final_state.get("retrieved_docs", [])
+
+        # 串流逐字送出 (模擬打字機效果)
+        chunk_size = 4
+        for i in range(0, len(full_answer), chunk_size):
+            chunk = full_answer[i:i + chunk_size]
+            yield {"type": "content", "data": chunk}
+            await asyncio.sleep(0.01)
+
+        # 整理 unique contexts for display
+        unique_display_contexts = []
+        seen_keys = set()
+        for ctx in cleaned_contexts:
+            unique_key = ctx.get("source_file")
+            if unique_key and unique_key not in seen_keys:
+                unique_display_contexts.append(ctx)
+                seen_keys.add(unique_key)
+
+        contexts_for_logging = unique_display_contexts
+        result_data = {"contexts": unique_display_contexts, "chips": []}
+        rephrased_question = question  # Agent 內部已經做了 profile-based 搜尋
+
+        stream_completed = True
+
+    except Exception as e:
+        logger.error(f"[Agent] Pipeline error: {e}", exc_info=True)
+        full_answer = "抱歉，系統發生錯誤，請稍後再試。"
+        yield {"type": "content", "data": full_answer}
+
+    finally:
+        latency_ms = (time.time() - start_time) * 1000
+        logger.info(f"[Agent] Total latency: {latency_ms:.2f} ms")
+
+        result_data = await _log_interaction_to_db(
+            stream_completed, {}, original_question, rephrased_question,
+            full_answer, contexts_for_logging, latency_ms,
+            request_id, session_id, user_id, result_data,
+        )
+        yield {"type": "final_data", "data": result_data}

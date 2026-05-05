@@ -15,7 +15,7 @@ import traceback
 import json
 import time
 from fastapi.responses import StreamingResponse, JSONResponse
-from rag_service import stream_chat_pipeline
+from rag_service import stream_chat_pipeline, stream_agent_pipeline
 import admin_api
 from scheduler import start_scheduler
 from logger import get_logger, request_id_var
@@ -151,7 +151,7 @@ async def chat_endpoint(request: Request, chat_request: ChatRequest):
             # ---------------------------------------------------------------------------------
 
             # The pipeline now yields events (content chunks or final data)
-            async for event in stream_chat_pipeline(chat_request.query, chat_request.history or [], chat_request.lang, title_filter=chat_request.title_filter, request_id=rid, session_id=sid, user_id=uid):
+            async for event in stream_agent_pipeline(chat_request.query, chat_request.history or [], chat_request.lang, title_filter=chat_request.title_filter, request_id=rid, session_id=sid, user_id=uid):
                 event_type = event.get("type")
                 data = event.get("data")
 

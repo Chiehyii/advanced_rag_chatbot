@@ -7,10 +7,10 @@ uvicorn==0.40.0
 
 # --- OpenAI + LangChain ---
 openai==2.9.0
+langgraph>=0.4.1
+langchain-openai>=0.3.0
 # langchain
 # langchain-community
-# langchain-core
-# langchain-openai
 langchain-text-splitters==1.1.0
 
 # --- Vector DBs ---
