@@ -154,12 +154,7 @@ Rules for Filtering:
         # ═══════════════════════════════════════════
         'extraction_system': """你是一個獎學金資訊擷取的專家助理。請從收到的內容中提取所需的資訊並以 JSON 格式回傳。
 請提取以下欄位：
-- title (名稱)
 - link (網址 - 若內容有提供的話)
-- category (衣珠類別，例如: "生活無憂", 如果沒有請寫 "")
-- education_system (學制：陣列，例如 ["大學部", "研究所"])
-- tags (類別/種類：陣列，例如 ["減免", "助學金"])
-- identity (身分：陣列，例如 ["中低收入戶", "低收入戶", "原住民"])
 - amount_summary (金額說明)
 - description (介紹 - 簡要描述)
 - application_date_text (申請日期)

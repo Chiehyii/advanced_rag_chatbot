@@ -30,10 +30,12 @@ export function ScholarshipForm({ initialData, mode, onSaved, onDeleted, onUnaut
     const [code, setCode] = useState('');
     const [title, setTitle] = useState('');
     const [link, setLink] = useState('');
-    const [category, setCategory] = useState('');
+    const [categorySelected, setCategorySelected] = useState<OptionType | null>(null);
     const [eduSelected, setEduSelected] = useState<OptionType[]>([]);
     const [tagsSelected, setTagsSelected] = useState<OptionType[]>([]);
     const [identitySelected, setIdentitySelected] = useState<OptionType[]>([]);
+    const [residenceSelected, setResidenceSelected] = useState<OptionType[]>([]);
+    const [nationalitySelected, setNationalitySelected] = useState<OptionType[]>([]);
     const [date, setDate] = useState('');
     const [amount, setAmount] = useState('');
     const [contact, setContact] = useState('');
@@ -55,18 +57,26 @@ export function ScholarshipForm({ initialData, mode, onSaved, onDeleted, onUnaut
         if (!initialData) return;
         // 若是待處理狀態，預填 pending_data（新版草稿）供管理員審核
         const source = needsReview && initialData.pending_data ? initialData.pending_data : initialData;
-        setCode(initialData.scholarship_code || '');  // code 永遠用主記錄的
-        setTitle(source.title || '');
-        setLink(source.link || '');
-        setCategory(source.category || '');
-        setEduSelected(toOptions(source.education_system));
-        setTagsSelected(toOptions(source.tags));
-        setIdentitySelected(toOptions(source.identity));
-        setDate(source.application_date_text || '');
-        setAmount(source.amount_summary || '');
-        setContact(source.contact || '');
-        setDescription(source.description || '');
-        setMarkdown(source.markdown_content || '');
+        // code 永遠用主記錄的
+        setCode(initialData.scholarship_code || '');
+
+        // --- 文字、網址、內容：如果草稿有提取，就優先用草稿的，沒有才 fallback 到舊的 ---
+        setTitle(source.title || initialData.title || '');
+        setLink(source.link || initialData.link || '');
+        setDate(source.application_date_text || initialData.application_date_text || '');
+        setAmount(source.amount_summary || initialData.amount_summary || '');
+        setContact(source.contact || initialData.contact || '');
+        setDescription(source.description || initialData.description || '');
+        setMarkdown(source.markdown_content || initialData.markdown_content || '');
+
+        // --- 管理員專屬欄位（分類、標籤）：永遠使用目前資料庫(initialData)的紀錄 ---
+        // 即使是 UPDATE 也不會被 pending_data 的空陣列覆蓋，確保變動時保持原本
+        setCategorySelected(initialData.category ? { value: initialData.category, label: initialData.category } : null);
+        setEduSelected(toOptions(initialData.education_system));
+        setTagsSelected(toOptions(initialData.tags));
+        setIdentitySelected(toOptions(initialData.identity));
+        setResidenceSelected(toOptions(initialData.registered_residence));
+        setNationalitySelected(toOptions(initialData.nationality));
     }, [initialData]);
 
     useEffect(() => {
@@ -79,10 +89,12 @@ export function ScholarshipForm({ initialData, mode, onSaved, onDeleted, onUnaut
         scholarship_code: code,
         title,
         link,
-        category,
+        category: categorySelected?.value || '',
         education_system: eduSelected.map(o => o.value),
         tags: tagsSelected.map(o => o.value),
         identity: identitySelected.map(o => o.value),
+        registered_residence: residenceSelected.map(o => o.value),
+        nationality: nationalitySelected.map(o => o.value),
         application_date_text: date,
         amount_summary: amount,
         contact,
@@ -189,7 +201,9 @@ export function ScholarshipForm({ initialData, mode, onSaved, onDeleted, onUnaut
                     </div>
                     <div className="input-group">
                         <label>衣珠類別 (Category)</label>
-                        <input type="text" id="f-category" value={category} onChange={e => setCategory(e.target.value)} />
+                        <Select options={toOptions(schema?.category)} value={categorySelected}
+                            onChange={v => setCategorySelected(v as OptionType)} placeholder="選擇類別..."
+                            styles={selectStyles} isClearable />
                     </div>
                     <div className="input-group">
                         <label>學制 (Education System)</label>
@@ -207,6 +221,18 @@ export function ScholarshipForm({ initialData, mode, onSaved, onDeleted, onUnaut
                         <label>適用身分 (Identity)</label>
                         <Select isMulti options={toOptions(schema?.identity)} value={identitySelected}
                             onChange={v => setIdentitySelected(v as OptionType[])} placeholder="選擇身分..."
+                            styles={selectStyles} />
+                    </div>
+                    <div className="input-group">
+                        <label>國籍限制 (Nationality)</label>
+                        <Select isMulti options={toOptions(schema?.nationality)} value={nationalitySelected}
+                            onChange={v => setNationalitySelected(v as OptionType[])} placeholder="選擇國籍..."
+                            styles={selectStyles} />
+                    </div>
+                    <div className="input-group">
+                        <label>戶籍地限制 (Residence)</label>
+                        <Select isMulti options={toOptions(schema?.registered_residence)} value={residenceSelected}
+                            onChange={v => setResidenceSelected(v as OptionType[])} placeholder="選擇戶籍地..."
                             styles={selectStyles} />
                     </div>
                     <div className="input-group">
