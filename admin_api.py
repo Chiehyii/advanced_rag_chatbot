@@ -42,6 +42,8 @@ class ScholarshipForm(BaseModel):
     education_system: List[str] = []
     tags: List[str] = []
     identity: List[str] = []
+    registered_residence: List[str] = []
+    nationality: List[str] = []
     amount_summary: Optional[str] = ""
     description: Optional[str] = ""
     application_date_text: Optional[str] = ""
@@ -345,7 +347,7 @@ def validate_scholarship_code(scholarship_code: str) -> str:
 def list_scholarships(current_admin: str = Depends(verify_admin)):
     try:
         with get_db_cursor() as (conn, cursor):
-            cursor.execute("SELECT scholarship_code, title, link, category, created_at, education_system, tags, identity, needs_review FROM scholarships ORDER BY created_at DESC;")
+            cursor.execute("SELECT scholarship_code, title, link, category, created_at, education_system, tags, identity, needs_review, registered_residence, nationality FROM scholarships ORDER BY created_at DESC;")
             rows = cursor.fetchall()
             
             result = []
@@ -360,6 +362,8 @@ def list_scholarships(current_admin: str = Depends(verify_admin)):
                     "tags": _parse_json_array(row[6]),
                     "identity": _parse_json_array(row[7]),
                     "needs_review": bool(row[8]) if row[8] is not None else False,
+                    "registered_residence": _parse_json_array(row[9]),
+                    "nationality": _parse_json_array(row[10]),
                 })
             return {"status": "success", "data": result}
     except Exception as e:
@@ -371,7 +375,7 @@ def get_scholarship(scholarship_code: str, current_admin: str = Depends(verify_a
     scholarship_code = validate_scholarship_code(scholarship_code)  # [SEC-2]
     try:
         with get_db_cursor() as (conn, cursor):
-            cursor.execute("SELECT scholarship_code, title, link, category, education_system, tags, identity, amount_summary, description, application_date_text, contact, markdown_content, needs_review, pending_data FROM scholarships WHERE scholarship_code = %s;", (scholarship_code,))
+            cursor.execute("SELECT scholarship_code, title, link, category, education_system, tags, identity, amount_summary, description, application_date_text, contact, markdown_content, needs_review, pending_data, registered_residence, nationality FROM scholarships WHERE scholarship_code = %s;", (scholarship_code,))
             row = cursor.fetchone()
             
             if not row:
@@ -392,6 +396,8 @@ def get_scholarship(scholarship_code: str, current_admin: str = Depends(verify_a
                 "markdown_content": row[11],
                 "needs_review": bool(row[12]) if row[12] is not None else False,
                 "pending_data": row[13] if row[13] is not None else None,
+                "registered_residence": _parse_json_array(row[14]),
+                "nationality": _parse_json_array(row[15]),
             }
             return {"status": "success", "data": data}
     except HTTPException:
@@ -470,8 +476,8 @@ def save_scholarship(form: ScholarshipForm, current_admin: str = Depends(verify_
         INSERT INTO scholarships (
             scholarship_code, title, link, category, education_system, tags, identity,
             amount_summary, description, application_date_text, contact, markdown_content,
-            content_hash, last_checked_at
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            content_hash, last_checked_at, registered_residence, nationality
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (scholarship_code) DO UPDATE SET
             title = EXCLUDED.title,
             link = EXCLUDED.link,
@@ -479,6 +485,8 @@ def save_scholarship(form: ScholarshipForm, current_admin: str = Depends(verify_
             education_system = EXCLUDED.education_system,
             tags = EXCLUDED.tags,
             identity = EXCLUDED.identity,
+            registered_residence = EXCLUDED.registered_residence,
+            nationality = EXCLUDED.nationality,
             amount_summary = EXCLUDED.amount_summary,
             description = EXCLUDED.description,
             application_date_text = EXCLUDED.application_date_text,
@@ -495,7 +503,9 @@ def save_scholarship(form: ScholarshipForm, current_admin: str = Depends(verify_
                 json.dumps(form.tags, ensure_ascii=False),
                 json.dumps(form.identity, ensure_ascii=False),
                 form.amount_summary, form.description, form.application_date_text,
-                form.contact, form.markdown_content, new_hash, current_time
+                form.contact, form.markdown_content, new_hash, current_time,
+                json.dumps(form.registered_residence, ensure_ascii=False),
+                json.dumps(form.nationality, ensure_ascii=False)
             ))
     except Exception as e:
         logger.error(f"[Admin API] DB error: {e}", exc_info=True)
@@ -510,7 +520,8 @@ def save_scholarship(form: ScholarshipForm, current_admin: str = Depends(verify_
             form.markdown_content, form.title,
             form.scholarship_code, form.link or "",
             form.identity, form.education_system,
-            form.category, form.tags
+            form.category, form.tags,
+            form.registered_residence, form.nationality
         )
         return {"status": "success", "message": f"Saved {count} chunks to Knowledge Base"}
     except Exception as e:
@@ -524,20 +535,25 @@ def update_scholarship(scholarship_code: str, form: ScholarshipForm, current_adm
     # 1. Update PostgreSQL (also clear pending review state)
     try:
         new_hash, current_time = _get_hash_if_url(form.link)
+        
         update_query = """
         UPDATE scholarships SET
             title = %s, link = %s, category = %s, education_system = %s, tags = %s, identity = %s,
+            registered_residence = %s, nationality = %s,
             amount_summary = %s, description = %s, application_date_text = %s, contact = %s,
             markdown_content = %s, content_hash = %s, last_checked_at = %s,
             needs_review = FALSE, pending_data = NULL
         WHERE scholarship_code = %s;
         """
+        
         with get_db_cursor(commit=True) as (conn, cursor):
             cursor.execute(update_query, (
                 form.title, form.link, form.category,
                 json.dumps(form.education_system, ensure_ascii=False),
                 json.dumps(form.tags, ensure_ascii=False),
                 json.dumps(form.identity, ensure_ascii=False),
+                json.dumps(form.registered_residence, ensure_ascii=False),
+                json.dumps(form.nationality, ensure_ascii=False),
                 form.amount_summary, form.description,
                 form.application_date_text, form.contact, form.markdown_content,
                 new_hash, current_time, scholarship_code
@@ -558,7 +574,8 @@ def update_scholarship(scholarship_code: str, form: ScholarshipForm, current_adm
             form.markdown_content, form.title,
             scholarship_code, form.link or "",
             form.identity, form.education_system,
-            form.category, form.tags
+            form.category, form.tags,
+            form.registered_residence, form.nationality
         )
         return {"status": "success", "message": f"Updated {count} chunks in Knowledge Base"}
     except Exception as e:

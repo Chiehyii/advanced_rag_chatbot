@@ -70,6 +70,8 @@ def create_database_and_table():
             sql.SQL("ALTER TABLE {table} ADD COLUMN IF NOT EXISTS request_id VARCHAR(36);").format(table=sql.Identifier(TABLE_NAME)),
             sql.SQL("ALTER TABLE {table} ADD COLUMN IF NOT EXISTS session_id VARCHAR(36);").format(table=sql.Identifier(TABLE_NAME)),
             sql.SQL("ALTER TABLE {table} ADD COLUMN IF NOT EXISTS user_id VARCHAR(36);").format(table=sql.Identifier(TABLE_NAME)),
+            sql.SQL("ALTER TABLE scholarships ADD COLUMN IF NOT EXISTS registered_residence JSONB;"),
+            sql.SQL("ALTER TABLE scholarships ADD COLUMN IF NOT EXISTS nationality JSONB;"),
         ]
         for mq in migration_queries:
             cursor.execute(mq)
@@ -84,6 +86,8 @@ def create_database_and_table():
             education_system JSONB,
             tags JSONB,
             identity JSONB,
+            registered_residence JSONB,
+            nationality JSONB,
             amount_summary TEXT,
             description TEXT,
             application_date_text TEXT,

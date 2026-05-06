@@ -35,6 +35,8 @@ def _insert_chunks_to_milvus(
     education_system: list,
     category: str,
     tags: list,
+    registered_residence: list = None,
+    nationality: list = None,
 ) -> int:
     """
     [CODE-1] 抽取的共用函式——切分、批次嵌入、寫入 Milvus。
@@ -52,8 +54,8 @@ def _insert_chunks_to_milvus(
     data_to_insert = []
     for chunk, vector in zip(chunks, vectors):
         data_to_insert.append({
-            # [CODE-2] 使用 UUID 確保唯一性，取代有潜在碰撞風險的 random.randint
-            "id": uuid.uuid4().int >> 65, # 右移 65 位確保結果 ≤ 2^63-1（Milvus INT64 上限）但如果數據預計會超過 1,000 萬筆 id可能會有重複的風險，建議使用 uuid.uuid4().int >> 64並重建milvus collection id 欄位= varchar
+            # [CODE-2] 使用 UUID 確保唯一性，改為直接儲存完整 UUID 字串，消除重複碰撞風險
+            "id": str(uuid.uuid4()),
             "text": chunk,
             "source_file": title + ".md",
             "source_path": scholarship_code,
@@ -62,6 +64,8 @@ def _insert_chunks_to_milvus(
             "education_system": education_system,
             "category": [category] if category else [],
             "tags": tags,
+            "registered_residence": registered_residence or [],
+            "nationality": nationality or [],
             "vector": vector
         })
 
@@ -87,7 +91,7 @@ def init_milvus_collection():
         auto_id=False,
         enable_dynamic_field=True
     )
-    schema.add_field("id", DataType.INT64, is_primary=True)
+    schema.add_field("id", DataType.VARCHAR, max_length=36, is_primary=True)
     schema.add_field("text", DataType.VARCHAR, max_length=5000, enable_analyzer=True)
     schema.add_field("source_file", DataType.VARCHAR, max_length=256)
     schema.add_field("source_path", DataType.VARCHAR, max_length=2048)
@@ -96,6 +100,8 @@ def init_milvus_collection():
     schema.add_field("education_system", DataType.ARRAY, element_type=DataType.VARCHAR, max_capacity=200, max_length=200, nullable=True)
     schema.add_field("category", DataType.ARRAY, element_type=DataType.VARCHAR, max_capacity=200, max_length=200, nullable=True)
     schema.add_field("tags", DataType.ARRAY, element_type=DataType.VARCHAR, max_capacity=200, max_length=200, nullable=True)
+    schema.add_field("registered_residence", DataType.ARRAY, element_type=DataType.VARCHAR, max_capacity=200, max_length=200, nullable=True)
+    schema.add_field("nationality", DataType.ARRAY, element_type=DataType.VARCHAR, max_capacity=200, max_length=200, nullable=True)
     schema.add_field("vector", DataType.FLOAT_VECTOR, dim=1536)
     schema.add_field("text_sparse", DataType.SPARSE_FLOAT_VECTOR, description="Sparse vector")
 
@@ -166,7 +172,7 @@ def perform_hybrid_search(
         reqs=[dense_req, sparse_req],
         ranker=reranker,
         limit=top_k,
-        output_fields=["id", "text", "source_file", "source_url", "identity", "category", "education_system", "tags"]
+        output_fields=["id", "text", "source_file", "source_url", "identity", "category", "education_system", "tags", "registered_residence", "nationality"]
     )
 
 def perform_search(
@@ -187,5 +193,5 @@ def perform_search(
         search_params=dense_search_params,
         limit=top_k,
         filter=expr if expr else None,
-        output_fields=["id", "text", "source_file", "source_url", "identity", "category", "education_system", "tags"]
+        output_fields=["id", "text", "source_file", "source_url", "identity", "category", "education_system", "tags", "registered_residence", "nationality"]
     )
