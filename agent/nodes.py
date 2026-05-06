@@ -4,6 +4,7 @@ Agent Nodes
 ===========
 每個函式對應 StateGraph 中的一個節點。
 所有 Node 接收 AgentState、回傳部分更新（Partial State Update）。
+所有 Prompt 統一從 prompts.py 讀取，不在此檔案中硬寫。
 """
 from __future__ import annotations
 import json
@@ -18,7 +19,7 @@ from agent.state import AgentState, UserProfile
 from prompts import PROMPTS
 from scripts.query_analyzer import analyze_query
 from db_repository import clean_retrieved_contexts
-from rag_service import get_embedding, retrieve_context, _rerank_documents
+from rag_service import get_embedding, retrieve_context
 from logger import get_logger
 
 logger = get_logger(__name__)
@@ -79,36 +80,6 @@ async def intent_router_node(state: AgentState) -> dict:
 # ─────────────────────────────────────────
 # Node 2: Profile Extraction（條件萃取）
 # ─────────────────────────────────────────
-
-_PROFILE_EXTRACT_SYSTEM_ZH = """你是一個條件萃取助理。請從以下「對話歷史」中，萃取出使用者已經提供的所有條件。
-
-你需要辨識：
-1. education_system（學制）：大學部 / 碩士班 / 博士班 / 五專 / 二技
-2. identity（身分）：一般生 / 原住民 / 中低收入戶 / 清寒 / 低收入戶 / 弱勢學生 / 境外生 / 國際生 / 僑生 / 港澳生 / 身心障礙 / 交換生 / 畢業生 / 研究生
-3. need（需求）：例如生活補助、海外交流、急難救助、學業獎學金、工讀、就學貸款等
-4. specific_name（使用者指定的獎學金名稱）：使用者直接提到的獎學金或補助的完整名稱
-
-**判斷 is_sufficient 的規則：**
-如果使用者有指定「具體獎學金名稱 (specific_name)」，直接設為 true。
-否則，至少需要提供 identity 或 education_system 其中之一，才能設為 true。
-如果都沒有提供，設為 false。
-"""
-
-_PROFILE_EXTRACT_SYSTEM_EN = """You are a condition extraction assistant. Extract all user-provided conditions from the conversation history.
-
-You need to identify:
-1. education_system: Undergraduate / Master's / PhD / 5-Year Program / 2-Year Program
-2. identity: e.g. General student, Indigenous, Low-income, Disability, International student, etc.
-3. need: e.g. Living allowance, Overseas exchange, Emergency relief, Academic scholarship, etc.
-4. specific_name: The exact name of a scholarship or grant mentioned by the user.
-
-**Rules for is_sufficient:**
-If the user has specified a specific scholarship name (specific_name), set to true.
-Otherwise, at least identity OR education_system must be provided to set is_sufficient to true.
-If none are provided, set to false.
-"""
-
-
 async def profile_extraction_node(state: AgentState) -> dict:
     """
     從完整對話歷史中萃取 UserProfile。
@@ -126,7 +97,7 @@ async def profile_extraction_node(state: AgentState) -> dict:
         elif isinstance(msg, AIMessage):
             history_text += f"assistant: {msg.content}\n"
 
-    system_prompt = _PROFILE_EXTRACT_SYSTEM_ZH if lang == "zh" else _PROFILE_EXTRACT_SYSTEM_EN
+    system_prompt = PROMPTS[lang]['profile_extraction_system']
 
     try:
         completion = await openai_client.beta.chat.completions.parse(
@@ -166,36 +137,6 @@ async def profile_extraction_node(state: AgentState) -> dict:
 # ─────────────────────────────────────────
 # Node 3: Clarification（反問釐清）
 # ─────────────────────────────────────────
-
-_CLARIFY_SYSTEM_ZH = """你是一個友善的慈濟大學獎學金助理。
-使用者想查詢獎助學金，但提供的資訊不夠充足。
-請根據目前已知的資訊，禮貌地追問 1-2 個問題，幫助縮小推薦範圍。
-
-已知的使用者資訊：{profile_json}
-
-追問重點（只問尚未得知的項目）：
-- 學制（大學部 / 碩士班 / 博士班 / 五專）
-- 身分（一般生、清寒/低收入戶、原住民、外籍生、身心障礙...）
-- 需求（生活補助、海外交流、急難救助...）
-
-回覆時不要列出所有獎學金，只需要友善地提問。語氣自然，像真人對話。
-"""
-
-_CLARIFY_SYSTEM_EN = """You are a friendly Tzu Chi University scholarship assistant.
-The user wants to inquire about scholarships but has not provided enough information.
-Based on what is already known, politely ask 1-2 questions to narrow down the recommendation.
-
-Known user information: {profile_json}
-
-Focus on asking about (only items not yet known):
-- Education level (Undergraduate / Master's / PhD / 5-Year Program)
-- Background (General student, Low-income, Indigenous, International, Disability...)
-- Need (Living allowance, Overseas exchange, Emergency relief...)
-
-Do NOT list any scholarships. Just ask questions naturally and friendly.
-"""
-
-
 async def clarify_node(state: AgentState) -> dict:
     """
     當條件不足時，生成反問訊息，引導使用者提供更多條件。
@@ -204,8 +145,7 @@ async def clarify_node(state: AgentState) -> dict:
     profile = state.get("user_profile", {})
     profile_json = json.dumps(profile, ensure_ascii=False, indent=2)
 
-    system_template = _CLARIFY_SYSTEM_ZH if lang == "zh" else _CLARIFY_SYSTEM_EN
-    system_prompt = system_template.format(profile_json=profile_json)
+    system_prompt = PROMPTS[lang]['clarify_system'].format(profile_json=profile_json)
 
     # 把最新的使用者訊息也傳入，讓回覆更自然
     last_human = ""
@@ -338,7 +278,7 @@ async def generate_node(state: AgentState) -> dict:
         full_text = "\n".join(texts)
         context_for_llm += f"內容: {full_text}\n"
 
-    # --- 組裝 messages for LLM（重點改善：帶入對話歷史）---
+    # --- 組裝 messages for LLM（帶入對話歷史 + user_profile）---
     system_prompt = PROMPTS[lang]["rag_system"]
 
     # 加入 profile context 讓 LLM 知道目前已知的使用者條件
@@ -373,7 +313,7 @@ async def generate_node(state: AgentState) -> dict:
         model=config.OPENAI_MODEL_NAME,
         messages=llm_messages,
         temperature=0.0,
-        stream=False,  # 在 Graph Node 中先用 non-stream；串流由外層 astream_events 處理
+        stream=False,  # 在 Graph Node 中先用 non-stream；串流由外層處理
     )
     answer = response.choices[0].message.content.strip()
     logger.info(f"[Generate] Answer length: {len(answer)} chars")

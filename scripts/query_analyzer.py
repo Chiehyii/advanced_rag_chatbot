@@ -80,25 +80,12 @@ async def analyze_query(question: str, lang: str = 'zh') -> tuple[str, str]:
     # 從 INTENT_DEFINITIONS 動態生成提示選項
     intent_options = "\n".join([f"- '{name}': {desc}" for name, desc in intent_definitions.items()])
 
-    system_prompt = f"""
-    You are an expert AI routing and filtering assistant.
-    Your task is to analyze the user's query and do TWO things:
-    
-    TASK 1: Intent Classification
-    Classify the query into EXACTLY ONE of the following intent categories:
-    {intent_options}
-    If none match, classify as 'other'.
-
-    TASK 2: Scholarship Filtering (ONLY if intent is 'scholarship')
-    Extract filtering criteria from the user's query based EXACTLY on these valid choices:
-    - Valid Identities: {json.dumps(metadata_schema.get('identity', []), ensure_ascii=False)}
-    - Valid Education Systems: {json.dumps(metadata_schema.get('education_system', []), ensure_ascii=False)}
-    - Valid Tags: {json.dumps(metadata_schema.get('tags', []), ensure_ascii=False)}
-    
-    Rules for Filtering:
-    1. Only use EXACT matches from the valid lists above.
-    2. If the user does not specify a constraint for a category, DO NOT invent one.
-    """
+    system_prompt = PROMPTS[lang]['query_analyzer_system'].format(
+        intent_options=intent_options,
+        identity_json=json.dumps(metadata_schema.get('identity', []), ensure_ascii=False),
+        education_system_json=json.dumps(metadata_schema.get('education_system', []), ensure_ascii=False),
+        tags_json=json.dumps(metadata_schema.get('tags', []), ensure_ascii=False),
+    )
 
     try:
         completion = await openai_client.beta.chat.completions.parse(

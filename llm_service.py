@@ -46,11 +46,7 @@ async def _translate_to_zh(text: str) -> str:
     response = await openai_client.chat.completions.create(
         model=config.OPENAI_MODEL_NAME,
         messages=[
-            {"role": "system", "content": (
-                "You are a professional translator. "
-                "Translate the user's text into Traditional Chinese (繁體中文). "
-                "Output ONLY the translated text, no explanations."
-            )},
+            {"role": "system", "content": PROMPTS['zh']['translate_system']},
             {"role": "user", "content": text}
         ],
         temperature=0.0,
