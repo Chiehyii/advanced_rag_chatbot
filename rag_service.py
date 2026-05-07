@@ -186,11 +186,7 @@ async def _handle_small_talk_branch(rephrased_question: str, lang: str, usage_da
     yield {"type": "branch_done", "full_answer": full_answer, "contexts_for_logging": [], "result_data": result_data}
 
 async def _preprocess_query(rephrased_question: str, lang: str, title_filter: list[str] | None):
-    """處理意圖分析、翻譯與向量化"""
-    async def _maybe_translate(text: str) -> str:
-        if lang == 'en':
-            return await _translate_to_zh(text)
-        return text
+    """處理意圖分析與向量化（Legacy pipeline 用）"""
 
     if title_filter and len(title_filter) > 0:
         intent = "scholarship"

@@ -292,19 +292,10 @@ async def retrieve_node(state: AgentState) -> dict:
     # 根據累積的 profile 生成 Milvus 過濾條件
     expr = build_milvus_expr_from_profile(profile, title_filter)
 
-    # 翻譯（如果是英文）
-    question_for_retrieval = search_question
-    if lang == "en":
-        try:
-            from llm_service import _translate_to_zh
-            question_for_retrieval = await _translate_to_zh(search_question)
-        except Exception:
-            pass
-
-    # 取得 embedding + 檢索
+    # 取得 embedding + 檢索（OpenAI Embedding 本身支援多語言，無需翻譯）
     try:
         embedding = await get_embedding(search_question)
-        raw_docs = await retrieve_context(search_question, question_for_retrieval, embedding, expr)
+        raw_docs = await retrieve_context(search_question, search_question, embedding, expr)
         cleaned = clean_retrieved_contexts(raw_docs)
         logger.info(f"[Retrieve] Found {len(cleaned)} documents after cleaning.")
         return {"retrieved_docs": cleaned}
