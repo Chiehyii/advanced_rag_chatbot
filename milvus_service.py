@@ -127,3 +127,65 @@ def init_milvus_collection():
     milvus_client.load_collection(collection_name=collection_name)
     
     return milvus_client, collection_name
+
+def perform_hybrid_search(
+    milvus_client,
+    collection_name: str,
+    dense_embedding: list[float],
+    sparse_text: str,
+    expr: str,
+    top_k: int = 7
+):
+    """
+    執行 Milvus 混合檢索 (Dense + Sparse)
+    """
+    from pymilvus import AnnSearchRequest, RRFRanker
+
+    dense_search_params = {"metric_type": "COSINE", "params": {"nprobe": 10}}
+    dense_req = AnnSearchRequest(
+        data=[dense_embedding],
+        anns_field="vector",
+        param=dense_search_params,
+        limit=top_k,
+        expr=expr
+    )
+
+    sparse_search_params = {"metric_type": "BM25", "params": {}}
+    sparse_req = AnnSearchRequest(
+        data=[sparse_text],
+        anns_field="text_sparse",
+        param=sparse_search_params,
+        limit=top_k,
+        expr=expr
+    )
+
+    reranker = RRFRanker()
+
+    return milvus_client.hybrid_search(
+        collection_name=collection_name,
+        reqs=[dense_req, sparse_req],
+        ranker=reranker,
+        limit=top_k,
+        output_fields=["id", "text", "source_file", "source_url", "identity", "category", "education_system", "tags"]
+    )
+
+def perform_search(
+    milvus_client,
+    collection_name: str,
+    dense_embedding: list[float],
+    expr: str,
+    top_k: int = 7
+):
+    """
+    執行 Milvus 單純的 Dense 檢索 (用於 Fallback)
+    """
+    dense_search_params = {"metric_type": "COSINE", "params": {"nprobe": 10}}
+    return milvus_client.search(
+        collection_name=collection_name,
+        data=[dense_embedding],
+        anns_field="vector",
+        search_params=dense_search_params,
+        limit=top_k,
+        filter=expr if expr else None,
+        output_fields=["id", "text", "source_file", "source_url", "identity", "category", "education_system", "tags"]
+    )

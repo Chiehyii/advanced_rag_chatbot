@@ -12,6 +12,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from logger import get_logger
 from llm_service import _translate_to_zh, _rephrase_question_with_history #, generate_suggested_replies
 from db_repository import clean_retrieved_contexts, log_to_db
+from milvus_service import perform_hybrid_search, perform_search
 
 logger = get_logger(__name__)
 
@@ -43,123 +44,7 @@ async def get_embedding(text):
     )
     return resp.data[0].embedding
 
-async def retrieve_context(question: str, question_for_retrieval: str, embedding: list[float], expr: str, top_k: int = 7):
-    """根據問題進行混合檢索 (Dense + Sparse) + 過濾
-
-    question: 原始（重述後）問題，用於 cross-encoder scoring
-    question_for_retrieval: 翻譯後問題（英文時為中文譯文），用於 BM25 sparse search
-    embedding: 預先計算好的 dense embedding
-    """
-    from pymilvus import AnnSearchRequest, RRFRanker
-
-    question_dense_embedding = embedding
-
-    # 執行混合檢索
-    dense_search_params = {"metric_type": "COSINE", "params": {"nprobe": 10}}
-    dense_req = AnnSearchRequest(
-        data=[question_dense_embedding],
-        anns_field="vector",
-        param=dense_search_params,
-        limit=top_k,
-        expr=expr
-    )
-
-    sparse_search_params = {"metric_type": "BM25", "params": {}}
-    sparse_req = AnnSearchRequest(
-        data=[question_for_retrieval],  # 中文翻譯版本，BM25 才有效
-        anns_field="text_sparse",
-        param=sparse_search_params,
-        limit=top_k,
-        expr=expr
-    )
-
-    reranker = RRFRanker()
-
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=8), reraise=True)
-    def _milvus_hybrid_search():
-        try:
-            results = milvus_client.hybrid_search(
-                collection_name=config.MILVUS_COLLECTION,
-                reqs=[dense_req, sparse_req],
-                ranker=reranker,
-                limit=top_k,
-                output_fields=["id", "text", "source_file", "source_url", "identity", "category", "education_system", "tags"]
-            )
-            logger.info(f"[Search] Hybrid search (Dense + Sparse) succeeded.")
-            return results
-        except Exception as e:
-            logger.warning(f"[Search] Hybrid search failed ({type(e).__name__}): {e}")
-            logger.info(f"[Search] Falling back to Dense-only search.")
-            try:
-                results = milvus_client.search(
-                    collection_name=config.MILVUS_COLLECTION,
-                    data=[question_dense_embedding],
-                    anns_field="vector",
-                    search_params=dense_search_params,
-                    limit=top_k,
-                    filter=expr if expr else None,
-                    output_fields=["id", "text", "source_file", "source_url", "identity", "category", "education_system", "tags"],
-                )
-                logger.info(f"[Search] Dense-only fallback succeeded.")
-                return results
-            except Exception as fallback_err:
-                logger.error(f"[Search] Dense-only fallback also failed ({type(fallback_err).__name__}): {fallback_err}", exc_info=True)
-                raise fallback_err
-
-    try:
-        results = await asyncio.to_thread(_milvus_hybrid_search)
-    except Exception:
-        results = []
-
-    # --- Filter Fallback: 帶 filter 搜不到時，去掉 filter 重搜一次 ---
-    if (not results or not results[0]) and expr:
-        logger.info(f"[Filter] Filtered search returned 0 results. Retrying WITHOUT filter...")
-
-        dense_req_no_filter = AnnSearchRequest(
-            data=[question_dense_embedding],
-            anns_field="vector",
-            param=dense_search_params,
-            limit=top_k,
-            expr=""
-        )
-        sparse_req_no_filter = AnnSearchRequest(
-            data=[question],
-            anns_field="text_sparse",
-            param=sparse_search_params,
-            limit=top_k,
-            expr=""
-        )
-
-        @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=8), reraise=True)
-        def _retry_without_filter():
-            try:
-                return milvus_client.hybrid_search(
-                    collection_name=config.MILVUS_COLLECTION,
-                    reqs=[dense_req_no_filter, sparse_req_no_filter],
-                    ranker=reranker,
-                    limit=top_k,
-                    output_fields=["id", "text", "source_file", "source_url",
-                                   "identity", "category", "education_system", "tags"]
-                )
-            except Exception as e:
-                logger.error(f"[Filter] Retry without filter failed ({type(e).__name__}): {e}", exc_info=True)
-                raise e
-
-        try:
-            results = await asyncio.to_thread(_retry_without_filter)
-            if results and results[0]:
-                logger.info(f"[Filter] Retry without filter found {len(results[0])} results.")
-            else:
-                logger.error(f"[Filter] Retry without filter also returned 0 results.")
-        except Exception:
-            results = []
-
-    if not results or not results[0]:
-        return []
-
-    milvus_docs = results[0]
-    
-    # --- Phase 5: Cross-Encoder Re-Ranking ---
+async def _rerank_documents(question_for_retrieval: str, milvus_docs: list):
     logger.info(f"[Re-Ranking] Milvus returned {len(milvus_docs)} candidate documents. Starting Cross-Encoder scoring...")
     
     pairs = []
@@ -211,6 +96,57 @@ async def retrieve_context(question: str, question_for_retrieval: str, embedding
     logger.info(f"[Re-Ranking] Selected {len(refined_docs)} documents (threshold >= {MIN_RERANK_SCORE}). Highest score: {refined_docs[0]['cross_encoder_score']:.4f}")
     
     return refined_docs
+
+async def retrieve_context(question: str, question_for_retrieval: str, embedding: list[float], expr: str, top_k: int = 7):
+    """根據問題進行混合檢索 (Dense + Sparse) + 過濾"""
+    
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=8), reraise=True)
+    def _do_hybrid():
+        try:
+            results = perform_hybrid_search(milvus_client, config.MILVUS_COLLECTION, embedding, question_for_retrieval, expr, top_k)
+            logger.info(f"[Search] Hybrid search (Dense + Sparse) succeeded.")
+            return results
+        except Exception as e:
+            logger.warning(f"[Search] Hybrid search failed ({type(e).__name__}): {e}")
+            logger.info(f"[Search] Falling back to Dense-only search.")
+            try:
+                results = perform_search(milvus_client, config.MILVUS_COLLECTION, embedding, expr, top_k)
+                logger.info(f"[Search] Dense-only fallback succeeded.")
+                return results
+            except Exception as fallback_err:
+                logger.error(f"[Search] Dense-only fallback also failed ({type(fallback_err).__name__}): {fallback_err}", exc_info=True)
+                raise fallback_err
+
+    try:
+        results = await asyncio.to_thread(_do_hybrid)
+    except Exception:
+        results = []
+
+    # --- Filter Fallback: 帶 filter 搜不到時，去掉 filter 重搜一次 ---
+    if (not results or not results[0]) and expr:
+        logger.info(f"[Filter] Filtered search returned 0 results. Retrying WITHOUT filter...")
+        
+        @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=8), reraise=True)
+        def _retry_without_filter():
+            try:
+                return perform_hybrid_search(milvus_client, config.MILVUS_COLLECTION, embedding, question_for_retrieval, "", top_k)
+            except Exception as e:
+                logger.error(f"[Filter] Retry without filter failed ({type(e).__name__}): {e}", exc_info=True)
+                raise e
+
+        try:
+            results = await asyncio.to_thread(_retry_without_filter)
+            if results and results[0]:
+                logger.info(f"[Filter] Retry without filter found {len(results[0])} results.")
+            else:
+                logger.error(f"[Filter] Retry without filter also returned 0 results.")
+        except Exception:
+            results = []
+
+    if not results or not results[0]:
+        return []
+
+    return await _rerank_documents(question_for_retrieval, results[0])
 
 async def generate_answer_stream(question: str, cleaned_contexts: list, lang: str = 'zh', usage_data: dict | None = None):
     """
@@ -310,6 +246,73 @@ async def _handle_small_talk_branch(rephrased_question: str, lang: str, usage_da
     result_data = {"contexts": [], "chips": []}
     yield {"type": "branch_done", "full_answer": full_answer, "contexts_for_logging": [], "result_data": result_data}
 
+async def _preprocess_query(rephrased_question: str, lang: str, title_filter: list[str] | None):
+    """處理意圖分析、翻譯與向量化"""
+    async def _maybe_translate(text: str) -> str:
+        if lang == 'en':
+            return await _translate_to_zh(text)
+        return text
+
+    if title_filter and len(title_filter) > 0:
+        intent = "scholarship"
+        safe_titles = [t.replace('"', '\\"') for t in title_filter[:3]]
+        title_exprs = ", ".join([f'"{t}.md"' for t in safe_titles])
+        expr = f"source_file in [{title_exprs}]"
+        logger.info(f"[Title Filter] User selected tags: {title_filter} → Milvus expr: {expr}")
+
+        title_str = "、".join(title_filter[:3]) if lang == 'zh' else ", ".join(title_filter[:3])
+        prefix = f"關於「{title_str}」：" if lang == 'zh' else f"Regarding '{title_str}': "
+        rephrased_question = prefix + rephrased_question
+        logger.info(f"[Title Filter] Injected tags into question: {rephrased_question}")
+
+        question_for_retrieval, embedding = await asyncio.gather(
+            _maybe_translate(rephrased_question),
+            get_embedding(rephrased_question),
+        )
+        return intent, expr, rephrased_question, question_for_retrieval, embedding
+
+    # 並行：analyze_query + translate + embed
+    results = await asyncio.gather(
+        analyze_query(rephrased_question, lang=lang),
+        _maybe_translate(rephrased_question),
+        get_embedding(rephrased_question),
+        return_exceptions=True,
+    )
+
+    if isinstance(results[0], Exception):
+        logger.warning(f"[Intent] analyze_query failed ({type(results[0]).__name__}), falling back to unfiltered RAG search.")
+        intent, expr = "scholarship", ""
+    else:
+        intent, expr = results[0]
+        logger.info(f"[Intent] Intent: {intent}, Expr(filter): {expr}")
+
+    question_for_retrieval = rephrased_question if isinstance(results[1], Exception) else results[1]
+    if isinstance(results[1], Exception):
+        logger.warning(f"[Translate] Translation failed ({type(results[1]).__name__}), using original question.")
+
+    if isinstance(results[2], Exception):
+        raise results[2]
+    embedding = results[2]
+
+    return intent, expr, rephrased_question, question_for_retrieval, embedding
+
+async def _log_interaction_to_db(stream_completed: bool, usage_data: dict, original_question: str, rephrased_question: str, full_answer: str, contexts_for_logging: list, latency_ms: float, request_id: str | None, session_id: str | None, user_id: str | None, result_data: dict):
+    if stream_completed:
+        try:
+            usage = usage_data.get("usage")
+            if usage:
+                logger.info(f"[Token Usage] prompt={usage.prompt_tokens}, completion={usage.completion_tokens}, total={usage.total_tokens}")
+            log_id = await asyncio.to_thread(log_to_db, original_question, rephrased_question, full_answer, contexts_for_logging, latency_ms, usage, request_id, session_id, user_id)
+        except Exception as e:
+            logger.error(f"[DB] log_to_db failed in thread: {e}", exc_info=True)
+            log_id = None
+
+        if log_id:
+            result_data["log_id"] = log_id
+    else:
+        logger.warning(f"[DB] Stream did not complete (client disconnected?), skipping DB log.")
+    return result_data
+
 async def stream_chat_pipeline(question: str, history: list | None = None, lang: str = 'zh', title_filter: list[str] | None = None, request_id: str | None = None, session_id: str | None = None, user_id: str | None = None):
     """
     Orchestrates the entire RAG pipeline for streaming responses.
@@ -323,84 +326,32 @@ async def stream_chat_pipeline(question: str, history: list | None = None, lang:
     usage_data = {}
     stream_completed = False
 
-    async def _maybe_translate(text: str) -> str:
-        """英文問題翻成中文供 BM25 使用；中文問題直接回傳。"""
-        if lang == 'en':
-            return await _translate_to_zh(text)
-        return text
-
     try:
         user_msg_count = sum(1 for msg in (history or []) if msg.get('role') == 'user')
-
         if user_msg_count >= 1:
             rephrased_question = await _rephrase_question_with_history(history, question, lang=lang)
         else:
-            rephrased_question = question
             logger.info("[Rephrase] Skipped rephrasing because this is the first user query.")
 
         logger.info(f"[Question] Final question: {rephrased_question} (Original: {original_question})")
 
-        # --- 並行取得：意圖分析 / 翻譯 / embedding ---
-        # rephrase 完成後，三者互相獨立，可以同時發出 API 請求，
-        # 避免串行等待造成 ~600-1000ms 的額外延遲。
-        if title_filter and len(title_filter) > 0:
-            intent = "scholarship"
-            safe_titles = [t.replace('"', '\\"') for t in title_filter[:3]]
-            title_exprs = ", ".join([f'"{t}.md"' for t in safe_titles])
-            expr = f"source_file in [{title_exprs}]"
-            logger.info(f"[Title Filter] User selected tags: {title_filter} → Milvus expr: {expr}")
+        # 1. 前處理 (Preprocess)
+        intent, expr, rephrased_question, question_for_retrieval, embedding = await _preprocess_query(
+            rephrased_question, lang, title_filter
+        )
 
-            title_str = "、".join(title_filter[:3]) if lang == 'zh' else ", ".join(title_filter[:3])
-            prefix = f"關於「{title_str}」：" if lang == 'zh' else f"Regarding '{title_str}': "
-            rephrased_question = prefix + rephrased_question
-            logger.info(f"[Title Filter] Injected tags into question: {rephrased_question}")
-
-            # title_filter 已知 intent，只需並行 translate + embed
-            question_for_retrieval, embedding = await asyncio.gather(
-                _maybe_translate(rephrased_question),
-                get_embedding(rephrased_question),
-            )
-        else:
-            # 並行：analyze_query + translate + embed
-            results = await asyncio.gather(
-                analyze_query(rephrased_question, lang=lang),
-                _maybe_translate(rephrased_question),
-                get_embedding(rephrased_question),
-                return_exceptions=True,
-            )
-
-            # analyze_query 結果
-            if isinstance(results[0], Exception):
-                logger.warning(f"[Intent] analyze_query failed ({type(results[0]).__name__}), falling back to unfiltered RAG search.")
-                intent, expr = "scholarship", ""
-            else:
-                intent, expr = results[0]
-                logger.info(f"[Intent] Intent: {intent}, Expr(filter): {expr}")
-
-            # 翻譯結果（失敗時 fallback 回原文）
-            question_for_retrieval = rephrased_question if isinstance(results[1], Exception) else results[1]
-            if isinstance(results[1], Exception):
-                logger.warning(f"[Translate] Translation failed ({type(results[1]).__name__}), using original question.")
-
-            # embedding 結果（失敗則直接拋出，無法繼續檢索）
-            if isinstance(results[2], Exception):
-                raise results[2]
-            embedding = results[2]
-
+        # 2. 檢索 (Retrieve Context)
         cleaned_contexts = []
-
         if intent != 'other':
             logger.info(f"[Pipeline] Intent is '{intent}', retrieving documents (Milvus)...")
             raw_contexts = await retrieve_context(
-                rephrased_question,
-                question_for_retrieval=question_for_retrieval,
-                embedding=embedding,
-                expr=expr,
+                rephrased_question, question_for_retrieval, embedding, expr
             )
             cleaned_contexts = clean_retrieved_contexts(raw_contexts)
         else:
             logger.info(f"[Pipeline] Intent is '{intent}', skipping retrieval.")
         
+        # 3. 串流生成 (Stream Generation)
         if cleaned_contexts:
             async for chunk in _handle_rag_branch(rephrased_question, cleaned_contexts, lang, usage_data):
                 if chunk["type"] == "branch_done":
@@ -421,23 +372,12 @@ async def stream_chat_pipeline(question: str, history: list | None = None, lang:
         stream_completed = True
 
     finally:
-        end_time = time.time()
-        latency_ms = (end_time - start_time) * 1000
+        latency_ms = (time.time() - start_time) * 1000
         logger.info(f"[Total latency] {latency_ms:.2f} ms")
         
-        if stream_completed:
-            try:
-                usage = usage_data.get("usage")
-                if usage:
-                    logger.info(f"[Token Usage] prompt={usage.prompt_tokens}, completion={usage.completion_tokens}, total={usage.total_tokens}")
-                log_id = await asyncio.to_thread(log_to_db, original_question, rephrased_question, full_answer, contexts_for_logging, latency_ms, usage, request_id, session_id, user_id)
-            except Exception as e:
-                logger.error(f"[DB] log_to_db failed in thread: {e}", exc_info=True)
-                log_id = None
-
-            if log_id:
-                result_data["log_id"] = log_id
-        else:
-            logger.warning(f"[DB] Stream did not complete (client disconnected?), skipping DB log.")
-        
+        result_data = await _log_interaction_to_db(
+            stream_completed, usage_data, original_question, rephrased_question,
+            full_answer, contexts_for_logging, latency_ms,
+            request_id, session_id, user_id, result_data
+        )
         yield {"type": "final_data", "data": result_data}
