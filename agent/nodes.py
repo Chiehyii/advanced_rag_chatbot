@@ -33,10 +33,12 @@ openai_client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
 class ExtractedProfile(BaseModel):
     """LLM 從對話中萃取出的使用者條件"""
     education_system: Optional[str] = Field(None, description="學制，例如 大學部 / 碩士班 / 博士班 / 五專 / 二技")
+    nationality: Optional[str] = Field(None, description="國籍，例如 本國籍 / 外籍生 / 僑生 / 港澳生")
+    registered_residence: Optional[str] = Field(None, description="戶籍地，例如 臺北市 / 花蓮縣 / 不限")
     identity: Optional[list[str]] = Field(None, description="身分，例如 ['低收入戶', '原住民']")
     need: Optional[str] = Field(None, description="需求，例如 生活補助 / 海外交流 / 急難救助")
     specific_name: Optional[str] = Field(None, description="使用者指定的獎學金名稱")
-    is_sufficient: bool = Field(False, description="使用者提供的條件是否足夠進行精準推薦（至少指定了身分或學制或特定獎學金名稱）")
+    is_sufficient: bool = Field(False, description="條件是否足夠（需要 nationality + education_system，或 specific_name）")
 
 
 # ─────────────────────────────────────────
@@ -45,7 +47,7 @@ class ExtractedProfile(BaseModel):
 async def intent_router_node(state: AgentState) -> dict:
     """
     判斷最新一則使用者訊息的意圖：scholarship 或 other。
-    同時組裝 Milvus 過濾 expression（沿用原有的 analyze_query）。
+    不再生成 Milvus 過濾條件（已移至 retrieve_node）。
     """
     messages = state["messages"]
     lang = state.get("lang", "zh")
@@ -60,21 +62,18 @@ async def intent_router_node(state: AgentState) -> dict:
 
     # 如果前端有帶 title_filter，直接走 scholarship
     if title_filter and len(title_filter) > 0:
-        safe_titles = [t.replace('"', '\\"') for t in title_filter[:3]]
-        title_exprs = ", ".join([f'"{t}.md"' for t in safe_titles])
-        expr = f"source_file in [{title_exprs}]"
-        logger.info(f"[Router] Title filter detected: {title_filter} → expr={expr}")
-        return {"current_intent": "scholarship", "milvus_expr": expr}
+        logger.info(f"[Router] Title filter detected: {title_filter} → scholarship")
+        return {"current_intent": "scholarship"}
 
-    # 使用原有的 analyze_query 做意圖 + filter
+    # 純意圖分類（analyze_query 已簡化為只回傳 intent 字串）
     try:
-        intent, expr = await analyze_query(last_human, lang=lang)
-        logger.info(f"[Router] Intent={intent}, Expr={expr}")
+        intent = await analyze_query(last_human, lang=lang)
+        logger.info(f"[Router] Intent={intent}")
     except Exception as e:
         logger.warning(f"[Router] analyze_query failed ({type(e).__name__}), defaulting to scholarship.")
-        intent, expr = "scholarship", ""
+        intent = "scholarship"
 
-    return {"current_intent": intent, "milvus_expr": expr}
+    return {"current_intent": intent}
 
 
 # ─────────────────────────────────────────
@@ -119,6 +118,10 @@ async def profile_extraction_node(state: AgentState) -> dict:
         new_profile: UserProfile = {**existing_profile}
         if extracted.education_system:
             new_profile["education_system"] = extracted.education_system
+        if extracted.nationality:
+            new_profile["nationality"] = extracted.nationality
+        if extracted.registered_residence:
+            new_profile["registered_residence"] = extracted.registered_residence
         if extracted.identity:
             new_profile["identity"] = extracted.identity
         if extracted.need:
@@ -170,15 +173,83 @@ async def clarify_node(state: AgentState) -> dict:
 
 
 # ─────────────────────────────────────────
+# Utility: Profile → Milvus Expression
+# ─────────────────────────────────────────
+def build_milvus_expr_from_profile(profile: dict, title_filter: list[str] | None = None) -> str:
+    """
+    根據跨輪次累積的 user_profile，動態生成精確的 Milvus 過濾表達式。
+
+    過濾規則（精確匹配，無寬容邏輯）：
+    - registered_residence: 使用者戶籍 OR "不限"
+    - nationality: 精確匹配（必填欄位）
+    - education_system: 精確匹配（必填欄位）
+    - identity: 使用者身分 OR "一般生"
+    - tags: 精確匹配（可選）
+    """
+    # 前端指定特定獎學金 → 直接精準匹配，跳過 profile-based 過濾
+    if title_filter and len(title_filter) > 0:
+        safe_titles = [t.replace('"', '\\"') for t in title_filter[:3]]
+        title_exprs = ", ".join([f'"{t}.md"' for t in safe_titles])
+        expr = f"source_file in [{title_exprs}]"
+        logger.info(f"[Filter] Title filter override: {expr}")
+        return expr
+
+    parts = []
+
+    # --- registered_residence: 使用者戶籍 OR "不限" ---
+    residence = profile.get("registered_residence")
+    if residence and residence != "不限":
+        parts.append(
+            f'(ARRAY_CONTAINS(registered_residence, "{residence}") or '
+            f'ARRAY_CONTAINS(registered_residence, "不限"))'
+        )
+
+    # --- nationality: 精確匹配 ---
+    nationality = profile.get("nationality")
+    if nationality:
+        parts.append(f'ARRAY_CONTAINS(nationality, "{nationality}")')
+
+    # --- education_system: 精確匹配 ---
+    edu = profile.get("education_system")
+    if edu:
+        parts.append(f'ARRAY_CONTAINS(education_system, "{edu}")')
+
+    # --- identity: 使用者身分 OR "一般生" ---
+    identities = profile.get("identity")
+    if identities and isinstance(identities, list):
+        # 過濾掉 "一般生"，因為我們會自動加入
+        special_ids = [i for i in identities if i != "一般生"]
+        if special_ids:
+            # 有特殊身分：匹配特殊身分 OR 一般生
+            all_ids = special_ids + ["一般生"]
+            vals_str = ", ".join([f'"{v}"' for v in all_ids])
+            parts.append(f'ARRAY_CONTAINS_ANY(identity, [{vals_str}])')
+        else:
+            # 只有一般生
+            parts.append('ARRAY_CONTAINS(identity, "一般生")')
+
+    # --- tags: 精確匹配（可選）---
+    # tags 來自 need 的推斷，暫不自動生成，由語意搜尋處理
+
+    if parts:
+        expr = " AND ".join([f"({p})" for p in parts])
+        logger.info(f"[Filter] Profile-based expr: {expr}")
+        return expr
+
+    logger.info("[Filter] No profile conditions → no filter applied.")
+    return ""
+
+
+# ─────────────────────────────────────────
 # Node 4: Retrieve（Milvus 檢索）
 # ─────────────────────────────────────────
 async def retrieve_node(state: AgentState) -> dict:
     """
-    使用 Milvus 進行混合檢索，沿用原有的 retrieve_context + rerank。
+    使用 Milvus 進行混合檢索。
+    過濾條件由 build_milvus_expr_from_profile() 根據累積的 user_profile 動態生成。
     """
     messages = state["messages"]
     lang = state.get("lang", "zh")
-    expr = state.get("milvus_expr", "")
     profile = state.get("user_profile", {})
     title_filter = state.get("title_filter")
 
@@ -189,10 +260,12 @@ async def retrieve_node(state: AgentState) -> dict:
             last_human = msg.content
             break
 
-    # 加入 profile 條件到檢索問題中，提升檢索精準度
+    # 加入 profile 條件到檢索問題中，提升語意檢索精準度
     profile_parts = []
     if profile.get("education_system"):
         profile_parts.append(profile["education_system"])
+    if profile.get("nationality"):
+        profile_parts.append(profile["nationality"])
     if profile.get("identity"):
         if isinstance(profile["identity"], list):
             profile_parts.append("、".join(profile["identity"]))
@@ -203,7 +276,7 @@ async def retrieve_node(state: AgentState) -> dict:
     if profile.get("specific_name"):
         profile_parts.append(profile["specific_name"])
 
-    # 如果有 title_filter 就注入
+    # 構建最終搜尋問題
     if title_filter and len(title_filter) > 0:
         title_str = "、".join(title_filter[:3]) if lang == "zh" else ", ".join(title_filter[:3])
         prefix = f"關於「{title_str}」：" if lang == "zh" else f"Regarding '{title_str}': "
@@ -215,6 +288,9 @@ async def retrieve_node(state: AgentState) -> dict:
         search_question = last_human
 
     logger.info(f"[Retrieve] Search question: {search_question}")
+
+    # 根據累積的 profile 生成 Milvus 過濾條件
+    expr = build_milvus_expr_from_profile(profile, title_filter)
 
     # 翻譯（如果是英文）
     question_for_retrieval = search_question
@@ -286,6 +362,10 @@ async def generate_node(state: AgentState) -> dict:
         profile_desc_parts = []
         if profile.get("education_system"):
             profile_desc_parts.append(f"學制: {profile['education_system']}")
+        if profile.get("nationality"):
+            profile_desc_parts.append(f"國籍: {profile['nationality']}")
+        if profile.get("registered_residence"):
+            profile_desc_parts.append(f"戶籍地: {profile['registered_residence']}")
         if profile.get("identity"):
             id_str = "、".join(profile["identity"]) if isinstance(profile["identity"], list) else profile["identity"]
             profile_desc_parts.append(f"身分: {id_str}")

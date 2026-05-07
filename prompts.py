@@ -127,23 +127,12 @@ PROMPTS = {
         # ═══════════════════════════════════════════
         # Shared: Query Analyzer（意圖+過濾合一）
         # ═══════════════════════════════════════════
-        'query_analyzer_system': """You are an expert AI routing and filtering assistant.
-Your task is to analyze the user's query and do TWO things:
-
-TASK 1: Intent Classification
-Classify the query into EXACTLY ONE of the following intent categories:
+        'query_analyzer_system': """You are an intent classification assistant.
+Classify the user's query into EXACTLY ONE of the following intent categories:
 {intent_options}
+
 If none match, classify as 'other'.
-
-TASK 2: Scholarship Filtering (ONLY if intent is 'scholarship')
-Extract filtering criteria from the user's query based EXACTLY on these valid choices:
-- Valid Identities: {identity_json}
-- Valid Education Systems: {education_system_json}
-- Valid Tags: {tags_json}
-
-Rules for Filtering:
-1. Only use EXACT matches from the valid lists above.
-2. If the user does not specify a constraint for a category, DO NOT invent one.
+Output ONLY the intent classification, no filtering or extra analysis.
 """,
 
         # ═══════════════════════════════════════════
@@ -345,23 +334,12 @@ Retrieved Content:
             "scholarship": "Any question related to the Tzu Chi University Yi Zhu Project (衣珠專案), including but not limited to: scholarships, grants, financial aid, living allowances, work-study programs, student loans, emergency relief, housing subsidies, international exchange, career programs, volunteer service, self-directed learning, certification exams, academic subsidies, innovation awards, and student support services.",
             "other": "Greetings, pleasantries, small talk, or other questions."
         },
-        'query_analyzer_system': """You are an expert AI routing and filtering assistant.
-Your task is to analyze the user's query and do TWO things:
-
-TASK 1: Intent Classification
-Classify the query into EXACTLY ONE of the following intent categories:
+        'query_analyzer_system': """You are an intent classification assistant.
+Classify the user's query into EXACTLY ONE of the following intent categories:
 {intent_options}
+
 If none match, classify as 'other'.
-
-TASK 2: Scholarship Filtering (ONLY if intent is 'scholarship')
-Extract filtering criteria from the user's query based EXACTLY on these valid choices:
-- Valid Identities: {identity_json}
-- Valid Education Systems: {education_system_json}
-- Valid Tags: {tags_json}
-
-Rules for Filtering:
-1. Only use EXACT matches from the valid lists above.
-2. If the user does not specify a constraint for a category, DO NOT invent one.
+Output ONLY the intent classification, no filtering or extra analysis.
 """,
         'translate_system': "You are a professional translator. Translate the user's text into Traditional Chinese (繁體中文). Output ONLY the translated text, no explanations.",
         'no_result_answer': "I'm sorry, I couldn't find any relevant information about grants or scholarships.",

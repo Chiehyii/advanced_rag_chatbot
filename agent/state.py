@@ -16,10 +16,12 @@ class UserProfile(TypedDict, total=False):
     所有欄位都是 optional（total=False），初始為空 dict，
     由 profile_extraction_node 逐步填入。
     """
-    education_system: str    # 學制：大學部 / 碩士班 / 博士班 / 五專 / 二技
-    identity: list[str]      # 身分：低收入戶 / 原住民 / 一般生 ...
-    need: str                # 需求：生活補助 / 海外交流 / 急難救助 ...
-    specific_name: str       # 使用者指定的獎學金名稱
+    education_system: str          # 學制：大學部 / 碩士班 / 博士班 / 五專 / 二技
+    identity: list[str]            # 身分：低收入戶 / 原住民 / 一般生 ...
+    need: str                      # 需求：生活補助 / 海外交流 / 急難救助 ...
+    specific_name: str             # 使用者指定的獎學金名稱
+    registered_residence: str      # 戶籍地：臺北市 / 花蓮縣 / 不限 ...
+    nationality: str               # 國籍：本國籍 / 外籍生 / 僑生 / 港澳生
 
 
 class AgentState(TypedDict, total=False):
@@ -29,7 +31,6 @@ class AgentState(TypedDict, total=False):
     - user_profile: 跨輪次累積的使用者條件。
     - retrieved_docs: 暫存本輪檢索到的文件（cleaned contexts）。
     - current_intent: 本輪路由判斷結果（scholarship / other）。
-    - milvus_expr: 組裝好的 Milvus 過濾表達式。
     - lang: 語言 (zh / en)。
     - title_filter: 前端傳入的獎學金標題篩選清單。
     - request_id / session_id / user_id: 日誌追蹤用。
@@ -38,7 +39,6 @@ class AgentState(TypedDict, total=False):
     user_profile: UserProfile
     retrieved_docs: list[dict]
     current_intent: str
-    milvus_expr: str
     lang: str
     title_filter: list[str] | None
     request_id: str | None
