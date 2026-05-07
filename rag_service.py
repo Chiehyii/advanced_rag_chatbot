@@ -5,28 +5,14 @@ from pymilvus import MilvusClient, AnnSearchRequest
 import config
 from prompts import PROMPTS
 from scripts.query_analyzer import analyze_query
-from sentence_transformers import CrossEncoder
-from concurrent.futures import ThreadPoolExecutor
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from logger import get_logger
-from llm_service import _translate_to_zh, _rephrase_question_with_history #, generate_suggested_replies
+from llm_service import _rephrase_question_with_history
 from db_repository import clean_retrieved_contexts, log_to_db
 from milvus_service import perform_hybrid_search, perform_search
 
 logger = get_logger(__name__)
-
-# --- Constants ---
-MIN_RERANK_SCORE = 0.3  # Minimum Cross-Encoder score to keep a document
-
-# --- Initialize Re-Ranking Model ---
-# Using a lightweight, multilingual reranker widely used for RAG (bge-reranker-base or M3)
-# Note: First startup will download the model.
-cross_encoder = CrossEncoder('BAAI/bge-reranker-base', max_length=512)
-
-# --- CPU Thread Pool ---
-# 限制 CPU 密集的重排序模型推論最大並發數，防止系統高負載時崩潰
-cpu_executor = ThreadPoolExecutor(max_workers=2)
 
 # 使用集中化的設定來初始化 clients
 openai_client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
@@ -44,61 +30,11 @@ async def get_embedding(text):
     )
     return resp.data[0].embedding
 
-async def _rerank_documents(question_for_retrieval: str, milvus_docs: list):
-    logger.info(f"[Re-Ranking] Milvus returned {len(milvus_docs)} candidate documents. Starting Cross-Encoder scoring...")
-    
-    pairs = []
-    for doc in milvus_docs:
-        doc_text = doc.get("entity", {}).get("text", "")
-        pairs.append([question_for_retrieval, doc_text])
-        
-    if not pairs:
-        return []
-
-    def _rank():
-        return cross_encoder.predict(pairs)
-        
-    loop = asyncio.get_running_loop()
-    scores = await loop.run_in_executor(cpu_executor, _rank)
-    
-    for i, doc in enumerate(milvus_docs):
-        doc["cross_encoder_score"] = float(scores[i])
-        
-    milvus_docs.sort(key=lambda x: x["cross_encoder_score"], reverse=True)
-
-    logger.info(f"[Re-Ranking] Candidate documents with scores (threshold={MIN_RERANK_SCORE}):")
-    for rank, doc in enumerate(milvus_docs, 1):
-        entity = doc.get("entity", {})
-        score = doc.get("cross_encoder_score", 0.0)
-        source = entity.get("source_file", "N/A")
-        identity = list(entity.get("identity") or [])
-        snippet = (entity.get("text") or "")[:80].replace("\n", " ")
-        passed = "✓" if score >= MIN_RERANK_SCORE else "✗"
-        logger.info(
-            f"  [{rank}] {passed} score={score:.4f} | source={source} | "
-            f"identity={identity} | text='{snippet}...'"
-        )
-
-    top_n = min(5, len(milvus_docs))
-    refined_docs = [d for d in milvus_docs[:top_n] if d["cross_encoder_score"] >= MIN_RERANK_SCORE]
-    
-    if not refined_docs:
-        top_scores = ", ".join(
-            f"{d.get('entity', {}).get('source_file', 'N/A')}={d.get('cross_encoder_score', 0.0):.4f}"
-            for d in milvus_docs[:top_n]
-        )
-        logger.info(
-            f"[Re-Ranking] No documents passed the minimum score threshold ({MIN_RERANK_SCORE}). "
-            f"Top-{top_n} candidate scores: [{top_scores}]"
-        )
-        return []
-    
-    logger.info(f"[Re-Ranking] Selected {len(refined_docs)} documents (threshold >= {MIN_RERANK_SCORE}). Highest score: {refined_docs[0]['cross_encoder_score']:.4f}")
-    
-    return refined_docs
-
 async def retrieve_context(question: str, question_for_retrieval: str, embedding: list[float], expr: str, top_k: int = 7):
-    """根據問題進行混合檢索 (Dense + Sparse) + 過濾"""
+    """
+    根據問題進行混合檢索 (Dense + Sparse) + Metadata 過濾。
+    排序由 Milvus 的 RRFRanker 處理，不再使用 CrossEncoder 重排序。
+    """
     
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=8), reraise=True)
     def _do_hybrid():
@@ -146,7 +82,10 @@ async def retrieve_context(question: str, question_for_retrieval: str, embedding
     if not results or not results[0]:
         return []
 
-    return await _rerank_documents(question_for_retrieval, results[0])
+    # 取 top 5，由 Milvus RRFRanker 已排好序
+    top_docs = results[0][:5]
+    logger.info(f"[Search] Returning top {len(top_docs)} documents (ranked by Milvus RRFRanker).")
+    return top_docs
 
 async def generate_answer_stream(question: str, cleaned_contexts: list, lang: str = 'zh', usage_data: dict | None = None):
     """

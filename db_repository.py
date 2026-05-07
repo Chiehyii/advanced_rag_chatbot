@@ -16,7 +16,7 @@ def clean_retrieved_contexts(retrieved_docs: list):
     cleaned_contexts = []
     for i, res in enumerate(retrieved_docs, 1):
         entity = res.get("entity", {})
-        score = res.get("cross_encoder_score", res.get("distance", 0.0))
+        score = res.get("distance", 0.0)
 
         identity = entity.get("identity")
         category = entity.get("category")
