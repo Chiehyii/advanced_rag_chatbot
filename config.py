@@ -28,7 +28,7 @@ REFRESH_TOKEN_EXPIRE_DAYS = 7 # 7 days
 # --- Zilliz / Milvus ---
 ZILLIZ_API_KEY = os.getenv("ZILLIZ_API_KEY")
 CLUSTER_ENDPOINT = os.getenv("CLUSTER_ENDPOINT")
-MILVUS_COLLECTION = os.getenv("MILVUS_COLLECTION", "rag6_scholarships_hybrid")
+MILVUS_COLLECTION = os.getenv("MILVUS_COLLECTION", "tcuscholarships_milvus")
 
 # --- PostgreSQL Database ---
 DB_TABLE_NAME = os.getenv("DB_TABLE_NAME", "qa_logs2")

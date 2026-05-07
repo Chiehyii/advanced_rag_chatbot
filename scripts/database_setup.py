@@ -65,20 +65,9 @@ def create_database_and_table():
         # Execute the SQL statement
         cursor.execute(create_table_query)
 
-        # --- Migration: 為已存在的資料表安全新增欄位 ---
-        migration_queries = [
-            sql.SQL("ALTER TABLE {table} ADD COLUMN IF NOT EXISTS request_id VARCHAR(36);").format(table=sql.Identifier(TABLE_NAME)),
-            sql.SQL("ALTER TABLE {table} ADD COLUMN IF NOT EXISTS session_id VARCHAR(36);").format(table=sql.Identifier(TABLE_NAME)),
-            sql.SQL("ALTER TABLE {table} ADD COLUMN IF NOT EXISTS user_id VARCHAR(36);").format(table=sql.Identifier(TABLE_NAME)),
-            sql.SQL("ALTER TABLE scholarships ADD COLUMN IF NOT EXISTS registered_residence JSONB;"),
-            sql.SQL("ALTER TABLE scholarships ADD COLUMN IF NOT EXISTS nationality JSONB;"),
-        ]
-        for mq in migration_queries:
-            cursor.execute(mq)
-
         # Create scholarships table
         create_scholarships_table_query = sql.SQL("""
-        CREATE TABLE IF NOT EXISTS scholarships (
+        CREATE TABLE IF NOT EXISTS tcuscholarships (
             scholarship_code VARCHAR(50) PRIMARY KEY,
             title VARCHAR(255) NOT NULL,
             link TEXT,
@@ -102,9 +91,20 @@ def create_database_and_table():
         """)
         cursor.execute(create_scholarships_table_query)
 
+        # --- Migration: 為已存在的資料表安全新增欄位 ---
+        migration_queries = [
+            sql.SQL("ALTER TABLE {table} ADD COLUMN IF NOT EXISTS request_id VARCHAR(36);").format(table=sql.Identifier(TABLE_NAME)),
+            sql.SQL("ALTER TABLE {table} ADD COLUMN IF NOT EXISTS session_id VARCHAR(36);").format(table=sql.Identifier(TABLE_NAME)),
+            sql.SQL("ALTER TABLE {table} ADD COLUMN IF NOT EXISTS user_id VARCHAR(36);").format(table=sql.Identifier(TABLE_NAME)),
+            sql.SQL("ALTER TABLE tcuscholarships ADD COLUMN IF NOT EXISTS registered_residence JSONB;"),
+            sql.SQL("ALTER TABLE tcuscholarships ADD COLUMN IF NOT EXISTS nationality JSONB;"),
+        ]
+        for mq in migration_queries:
+            cursor.execute(mq)
+
         # Commit the changes
         conn.commit()
-        logger.info(f"Database '{DB_NAME}', table '{TABLE_NAME}', and 'scholarships' table are set up successfully in PostgreSQL.")
+        logger.info(f"Database '{DB_NAME}', table '{TABLE_NAME}', and 'tcuscholarships' table are set up successfully in PostgreSQL.")
 
     except psycopg2.Error as e:
         # 🚨 ERROR：資料庫建立錯誤

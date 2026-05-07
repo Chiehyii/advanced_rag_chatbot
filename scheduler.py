@@ -115,7 +115,7 @@ def process_scholarship_update(row, new_hash, new_text):
         with get_db_cursor(commit=True) as (conn, cursor):
             cursor.execute(
                 """
-                UPDATE scholarships
+                UPDATE tcuscholarships
                 SET pending_data = %s, needs_review = TRUE, last_checked_at = %s
                 WHERE scholarship_code = %s
                 """,
@@ -136,7 +136,7 @@ def run_inspection():
     logger.info(f"\n[Scheduler] Running scholarship inspection at {datetime.now().isoformat()}")
     try:
         with get_db_cursor() as (conn, cursor):
-            cursor.execute("SELECT scholarship_code, title, link, content_hash FROM scholarships WHERE link IS NOT NULL AND link != '';")
+            cursor.execute("SELECT scholarship_code, title, link, content_hash FROM tcuscholarships WHERE link IS NOT NULL AND link != '';")
             rows = cursor.fetchall()
     except Exception as e:
         logger.error(f"[Scheduler] Inspection failed to fetch rows: {e}", exc_info=True)
@@ -170,7 +170,7 @@ def run_inspection():
             try:
                 with get_db_cursor(commit=True) as (update_conn, c2):
                     now = datetime.now(timezone.utc)
-                    c2.execute("UPDATE scholarships SET last_checked_at = %s WHERE scholarship_code = %s", (now.isoformat(), scholarship_code))
+                    c2.execute("UPDATE tcuscholarships SET last_checked_at = %s WHERE scholarship_code = %s", (now.isoformat(), scholarship_code))
             except Exception as e:
                 logger.warning(f"Failed to update last_checked for {title}: {e}")
     

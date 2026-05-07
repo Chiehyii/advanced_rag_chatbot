@@ -347,7 +347,7 @@ def validate_scholarship_code(scholarship_code: str) -> str:
 def list_scholarships(current_admin: str = Depends(verify_admin)):
     try:
         with get_db_cursor() as (conn, cursor):
-            cursor.execute("SELECT scholarship_code, title, link, category, created_at, education_system, tags, identity, needs_review, registered_residence, nationality FROM scholarships ORDER BY created_at DESC;")
+            cursor.execute("SELECT scholarship_code, title, link, category, created_at, education_system, tags, identity, needs_review, registered_residence, nationality FROM tcuscholarships ORDER BY created_at DESC;")
             rows = cursor.fetchall()
             
             result = []
@@ -375,7 +375,7 @@ def get_scholarship(scholarship_code: str, current_admin: str = Depends(verify_a
     scholarship_code = validate_scholarship_code(scholarship_code)  # [SEC-2]
     try:
         with get_db_cursor() as (conn, cursor):
-            cursor.execute("SELECT scholarship_code, title, link, category, education_system, tags, identity, amount_summary, description, application_date_text, contact, markdown_content, needs_review, pending_data, registered_residence, nationality FROM scholarships WHERE scholarship_code = %s;", (scholarship_code,))
+            cursor.execute("SELECT scholarship_code, title, link, category, education_system, tags, identity, amount_summary, description, application_date_text, contact, markdown_content, needs_review, pending_data, registered_residence, nationality FROM tcuscholarships WHERE scholarship_code = %s;", (scholarship_code,))
             row = cursor.fetchone()
             
             if not row:
@@ -413,7 +413,7 @@ def discard_pending(scholarship_code: str, current_admin: str = Depends(verify_a
     try:
         with get_db_cursor(commit=True) as (conn, cursor):
             cursor.execute(
-                "UPDATE scholarships SET needs_review = FALSE, pending_data = NULL WHERE scholarship_code = %s",
+                "UPDATE tcuscholarships SET needs_review = FALSE, pending_data = NULL WHERE scholarship_code = %s",
                 (scholarship_code,)
             )
         return {"status": "success", "message": "Pending changes discarded"}
@@ -473,7 +473,7 @@ def save_scholarship(form: ScholarshipForm, current_admin: str = Depends(verify_
         new_hash, current_time = _get_hash_if_url(form.link)
         
         insert_query = """
-        INSERT INTO scholarships (
+        INSERT INTO tcuscholarships (
             scholarship_code, title, link, category, education_system, tags, identity,
             amount_summary, description, application_date_text, contact, markdown_content,
             content_hash, last_checked_at, registered_residence, nationality
@@ -537,7 +537,7 @@ def update_scholarship(scholarship_code: str, form: ScholarshipForm, current_adm
         new_hash, current_time = _get_hash_if_url(form.link)
         
         update_query = """
-        UPDATE scholarships SET
+        UPDATE tcuscholarships SET
             title = %s, link = %s, category = %s, education_system = %s, tags = %s, identity = %s,
             registered_residence = %s, nationality = %s,
             amount_summary = %s, description = %s, application_date_text = %s, contact = %s,
@@ -607,7 +607,7 @@ def delete_scholarship(scholarship_code: str, current_admin: str = Depends(verif
     # 2. Milvus 刪除成功後，再刪 PostgreSQL
     try:
         with get_db_cursor(commit=True) as (conn, cursor):
-            cursor.execute("DELETE FROM scholarships WHERE scholarship_code = %s", (scholarship_code,))
+            cursor.execute("DELETE FROM tcuscholarships WHERE scholarship_code = %s", (scholarship_code,))
         return {"status": "success", "message": "Successfully deleted from Knowledge Base and DB"}
     except Exception as e:
         logger.error(f"[Admin API] delete_scholarship DB error: {e}", exc_info=True)
