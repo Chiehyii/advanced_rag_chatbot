@@ -16,7 +16,7 @@ class UserProfile(TypedDict, total=False):
     所有欄位都是 optional（total=False），初始為空 dict，
     由 profile_extraction_node 逐步填入。
     """
-    education_system: str          # 學制：大學部 / 碩士班 / 博士班 / 五專 / 二技
+    education_system: str          # 學制：大學部 / 碩士班 / 博士班 / 五專 / 五專(4至5年級) /二技
     identity: list[str]            # 身分：低收入戶 / 原住民 / 一般生 ...
     need: str                      # 需求：生活補助 / 海外交流 / 急難救助 ...
     specific_name: str             # 使用者指定的獎學金名稱
