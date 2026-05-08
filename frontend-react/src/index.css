@@ -121,7 +121,7 @@ body {
 }
 
 #chat-container {
-  max-width: 1050px;
+  max-width: 800px;
   width: 100%;
   margin: 0 auto;
   display: flex;
@@ -587,9 +587,8 @@ body {
   align-self: flex-end;
   background-color: var(--user-msg-bg);
   border-bottom-right-radius: 4px;
-  max-width: calc(60% - 360px / 2);
-  /* right margin = contexts(320) + gap(40) = 360px so user msg aligns with bot-left-col */
-  margin: 10px 360px 20px 0px;
+  max-width: 70%;
+  margin: 10px 0 20px 0;
 }
 
 .bot-message-container {
@@ -619,7 +618,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  max-width: calc(100% - 360px);
+  max-width: 100%;
 }
 
 .avatar {
@@ -739,37 +738,12 @@ body {
   }
 }
 
-.contexts {
-  width: 320px;
-  flex-shrink: 0;
+/* ======== Inline Source Cards (unified for all screens) ======== */
+.inline-contexts {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  position: sticky;
-  top: 20px;
-  align-self: flex-start;
-  padding-bottom: 60px;
-}
-
-.contexts-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 5px;
-}
-
-.contexts h4 {
-  margin: 0;
-  font-size: 0.9rem;
-  color: var(--text-muted);
-  font-weight: 600;
-}
-
-/* Hidden on desktop */
-.mobile-toggle-icon,
-.mobile-source-toggle-btn,
-.mobile-inline-contexts {
-  display: none !important;
+  gap: 10px;
+  animation: fadeInStep 0.3s ease-out;
 }
 
 .context-cards-list {
@@ -989,15 +963,12 @@ body {
 }
 
 #input-form {
-  /* Match chat-container: max-width 1050px, centered */
-  max-width: 1050px;
+  max-width: 800px;
   width: 100%;
   display: flex;
   flex-direction: column;
-  /* left=container-padding(15px), right=contexts(320)+gap(40)+container-pad(15)=375px */
-  padding: 0.75rem 375px 1rem 15px;
+  padding: 0.75rem 15px 1rem 15px;
   box-sizing: border-box;
-
 }
 
 #input-area.initial #input-form {
@@ -1378,8 +1349,9 @@ body {
 
   #input-form {
     /* Full width on mobile, no right-side offset */
+    max-width: 800px;
     padding: 0.5rem 12px 0.75rem 12px;
-    max-width: 100%;
+    width: 100%;
   }
 
   .example-questions-container {

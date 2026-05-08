@@ -68,50 +68,6 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
     };
   };
 
-  const renderContexts = (visibilityClass: string) => {
-    if (!contexts || contexts.length === 0 || isStreaming) return null;
-    return (
-      <div className={`contexts ${visibilityClass} ${isMobileExpanded ? 'mobile-expanded' : 'mobile-collapsed'}`}>
-        <div className="contexts-header" onClick={() => setIsMobileExpanded(!isMobileExpanded)}>
-          <h4>{t.reference_title}</h4>
-          <span className="mobile-toggle-icon">
-            {isMobileExpanded ? <ChevronDown size={18} strokeWidth={1.5} /> : <ChevronRight size={18} strokeWidth={1.5} />}
-          </span>
-        </div>
-        <div className="context-cards-list">
-          {contexts.map((ctx, idx) => {
-            const url = sanitizeUrl(ctx.source_url);
-            const domain = url !== '#' ? new URL(url).hostname : '';
-            const displaySnippet = (ctx.text || '').replace(/<[^>]*>?/gm, '');
-
-            return (
-              <a
-                key={idx}
-                id={`context-card-${logId || 'temp'}-${idx + 1}`}
-                href={url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="context-card-link"
-                title={ctx.source_file || 'Unknown'}
-              >
-                <div className="context-card">
-                  <div className="context-card-title">{ctx.source_file || t.unknown_source}</div>
-                  <div className="context-card-text">{displaySnippet}</div>
-                  <div className="context-card-url" style={{ color: '#666', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    {domain ? (
-                      <img src={`https://www.google.com/s2/favicons?sz=64&domain=${encodeURIComponent(domain)}`} alt="icon" style={{ width: 16, height: 16, borderRadius: 2 }} />
-                    ) : <Globe size={16} color="#888" />}
-                    <span className="url-text">{url}</span>
-                  </div>
-                </div>
-              </a>
-            );
-          })}
-        </div>
-      </div>
-    );
-  };
-
   if (role === 'user') {
     return (
       <div className="message user-message">
@@ -192,7 +148,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
                 </button>
                 {contexts && contexts.length > 0 && (
                   <button
-                    className={`feedback-btn mobile-source-toggle-btn ${isMobileExpanded ? 'active' : ''}`}
+                    className={`feedback-btn source-toggle-btn ${isMobileExpanded ? 'active' : ''}`}
                     onClick={() => setIsMobileExpanded(!isMobileExpanded)}
                     title={t.reference_title}
                   >
@@ -201,15 +157,16 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
                 )}
               </div>
             )}
+            {/* Inline source cards — toggled by BookOpen icon */}
             {isMobileExpanded && contexts && contexts.length > 0 && !isStreaming && (
-              <div className="mobile-inline-contexts">
+              <div className="inline-contexts">
                 {contexts.map((ctx, idx) => {
                   const url = sanitizeUrl(ctx.source_url);
                   const domain = url !== '#' ? new URL(url).hostname : '';
                   return (
                     <a
                       key={idx}
-                      id={`context-card-mobile-${logId || 'temp'}-${idx + 1}`}
+                      id={`context-card-${logId || 'temp'}-${idx + 1}`}
                       href={url}
                       target="_blank"
                       rel="noopener noreferrer"
@@ -240,7 +197,6 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
               </div>
             )}
           </div>
-          {renderContexts('desktop-only-contexts')}
         </div>
       </div>
     </div>
