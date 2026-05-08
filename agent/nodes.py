@@ -25,6 +25,15 @@ logger = get_logger(__name__)
 openai_client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
 
 
+def _detect_language(text: str) -> str:
+    """簡易語言偵測：ASCII 字元佔比 > 70% 視為英文，否則視為中文。"""
+    if not text:
+        return "zh"
+    ascii_chars = sum(1 for c in text if ord(c) < 128)
+    ratio = ascii_chars / len(text)
+    return "en" if ratio > 0.7 else "zh"
+
+
 # ─────────────────────────────────────────
 # Pydantic model for structured extraction
 # ─────────────────────────────────────────
@@ -300,10 +309,17 @@ async def generate_node(state: AgentState) -> dict:
         full_text = "\n".join(texts)
         context_for_llm += f"內容: {full_text}\n"
 
-    # --- 組裝 system prompt（注入 profile_sufficient 旗標 + profile）---
+    # --- 組裝 system prompt（注入 profile_sufficient 旗標 + 語言指令）---
+    question_lang = _detect_language(question)
+    response_lang_instruction = (
+        "\n\n⚠️ CRITICAL LANGUAGE RULE: The user asked in English. You MUST respond entirely in English, even though the context is in Chinese.\n"
+        if question_lang == "en"
+        else "\n\n⚠️ 關鍵語言規則：使用者使用中文提問，你必須全程使用繁體中文回答。\n"
+    )
+
     system_prompt = PROMPTS[lang]["rag_system"].format(
         profile_sufficient=str(profile_sufficient)
-    )
+    ) + response_lang_instruction
 
     if profile:
         profile_desc_parts = []
@@ -361,7 +377,14 @@ async def small_talk_node(state: AgentState) -> dict:
             last_human = msg.content
             break
 
-    llm_messages = [{"role": "system", "content": PROMPTS[lang]["small_talk_system"]}]
+    question_lang = _detect_language(last_human)
+    base_prompt = PROMPTS[lang]["small_talk_system"]
+    if question_lang == "en":
+        base_prompt += "\n\n⚠️ CRITICAL: The user is writing in English. You MUST respond in English."
+    else:
+        base_prompt += "\n\n⚠️ 使用者使用中文提問，你必須使用繁體中文回答。"
+
+    llm_messages = [{"role": "system", "content": base_prompt}]
     recent = messages[-4:] if len(messages) > 4 else messages
     for msg in recent[:-1]:
         if isinstance(msg, HumanMessage):
