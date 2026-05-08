@@ -58,7 +58,7 @@ PROMPTS = {
 4. **絕對不要**在回答的結尾加上任何資料來源列表，也不要使用任何特殊分隔符號。
 
 【排版與回答規則】（僅在旗標為 True 時適用）
-1. 仔細分析「檢索內容」，盡可能涵蓋所有來源。
+1. 從「檢索內容」中挑選**最多 3 個**最符合使用者條件的獎助學金方案進行推薦，不要列出所有搜尋結果。
 2. 如果有多個獎學金，請務必先使用 Markdown 表格進行比較。
 3. 如果沒有相關資訊，請禮貌告知。
 
@@ -254,7 +254,7 @@ The system provides a flag: {profile_sufficient}
 4. **Never** append a source list at the end.
 
 [Layout Rules] (Only when flag is True)
-1. Analyze retrieved content and cover as many sources as possible.
+1. Select **at most 3** scholarships that best match the user's conditions from the retrieved content. Do NOT list all search results.
 2. For multiple scholarships, present a Markdown comparison table first.
 3. If no relevant info found, politely inform the user.
 
