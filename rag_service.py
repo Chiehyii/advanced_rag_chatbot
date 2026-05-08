@@ -490,6 +490,16 @@ def _build_step_detail(node_name: str, node_output: dict, lang: str) -> str:
                 parts.append(f"國籍：{profile['nationality']}")
             if profile.get("education_system"):
                 parts.append(f"學制：{profile['education_system']}")
+            if profile.get("registered_residence"):
+                parts.append(f"戶籍：{profile['registered_residence']}")
+            if profile.get("identity"):
+                id_val = profile["identity"]
+                id_str = "、".join(id_val) if isinstance(id_val, list) else id_val
+                parts.append(f"身分：{id_str}")
+            if profile.get("need"):
+                parts.append(f"需求：{profile['need']}")
+            if profile.get("specific_name"):
+                parts.append(f"指定：{profile['specific_name']}")
             return "｜".join(parts)
         else:
             if intent == "small_talk":
@@ -499,6 +509,16 @@ def _build_step_detail(node_name: str, node_output: dict, lang: str) -> str:
                 parts.append(f"Nationality: {profile['nationality']}")
             if profile.get("education_system"):
                 parts.append(f"Level: {profile['education_system']}")
+            if profile.get("registered_residence"):
+                parts.append(f"Residence: {profile['registered_residence']}")
+            if profile.get("identity"):
+                id_val = profile["identity"]
+                id_str = ", ".join(id_val) if isinstance(id_val, list) else id_val
+                parts.append(f"Identity: {id_str}")
+            if profile.get("need"):
+                parts.append(f"Need: {profile['need']}")
+            if profile.get("specific_name"):
+                parts.append(f"Name: {profile['specific_name']}")
             return " | ".join(parts)
     elif node_name == "retrieve":
         docs = node_output.get("retrieved_docs", [])

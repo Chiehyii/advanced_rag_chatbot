@@ -58,47 +58,10 @@ PROMPTS = {
 4. **絕對不要**在回答的結尾加上任何資料來源列表，也不要使用任何特殊分隔符號。
 
 【排版與回答規則】（僅在旗標為 True 時適用）
-1. 從「檢索內容」中挑選**最多 3 個**最符合使用者條件的獎助學金方案進行推薦，不要列出所有搜尋結果。
-2. 如果有多個獎學金，請務必先使用 Markdown 表格進行比較。
-3. 如果沒有相關資訊，請禮貌告知。
-
-【標準問答排版範例 (Few-Shot Examples)】
-為了確保回答的專業度與易讀性，你「必須」遵守以下排版規則與範例：
-
-情境一：找到多個獎學金 → Markdown 表格
-使用者問題：我是低收入戶的大學生，有什麼獎學金可以申請？
-回答格式範例：
-你好！為您找到以下幾項符合資格的補助，以下為您整理比較表：
-
-| 獎學金名稱 | 補助金額 | 申請重點 |
-| :--- | :--- | :--- |
-| **慈濟大學弱勢學生助學金 [1]** | 依等級補助 1~2 萬元 | 需具備學雜費減免資格 |
-| **生活助學金 [2]** | 每月 6000 元 | 每月需參與 30 小時生活服務 |
-
-接下來為您分別詳細說明：
-
-### 慈濟大學弱勢學生助學金 [1]
-*   **申請資格**：家庭年所得低於 90 萬元以下之大學部學生。
-*   **應備文件**：戶籍謄本、所得清單。
-*   **注意事項**：請於事故發生後三個月內提出申請。
-
-### 生活助學金 [2]
-*   **申請資格**：具備低收入戶證明。
-*   **申請窗口**：學務處生輔組。
-
-
-情境二：只有單一獎學金時，條列式說明
-使用者問題：意外醫療補助怎麼領？
-回答格式範例：
-為您找到相關的補助資訊如下：
-
-### 學生急難救助金
-*   **補助條件**：學生發生意外事故或疾病住院，導致家庭經濟陷入困境。
-*   **補助金額**：視情況最高核發 20,000 元。
-*   **應備文件**：
-    1. 醫療診斷證明書。
-    2. 醫療費用收據正本。
-*   **注意事項**：請於事故發生後三個月內提出申請。
+1. **只推薦真正符合使用者條件的獎助學金**，不符合的直接跳過，不要提及。
+2. 從檢索內容中挑選**最多 3 個**最適合的方案進行推薦。
+3. 如果有 2 個以上，先使用 Markdown 表格進行比較，再分別詳述。
+4. 如果沒有相關資訊，請禮貌告知。
 
 """,
         'rag_user': """使用者問題：
@@ -254,47 +217,10 @@ The system provides a flag: {profile_sufficient}
 4. **Never** append a source list at the end.
 
 [Layout Rules] (Only when flag is True)
-1. Select **at most 3** scholarships that best match the user's conditions from the retrieved content. Do NOT list all search results.
-2. For multiple scholarships, present a Markdown comparison table first.
-3. If no relevant info found, politely inform the user.
-
-[Standard Formatting Examples (Few-Shot)]
-To ensure professionalism and readability, you MUST strictly follow these formatting rules:
-
-Scenario 1: Multiple scholarships found → Markdown table
-User Question: What scholarships are available for low-income undergraduate students?
-Response format example:
-Hello! I found several grants matching your qualifications. Here is a comparison table:
-
-| Scholarship Name | Amount | Key Requirement |
-| :--- | :--- | :--- |
-| **Tzu Chi University Disadvantaged Student Grant [1]** | 10,000–20,000 NTD depending on level | Must be eligible for tuition fee waiver |
-| **Living Allowance Grant [2]** | 6,000 NTD/month | 30 hours of monthly community service required |
-
-Here are the details for each:
-
-### Tzu Chi University Disadvantaged Student Grant [1]
-*   **Eligibility**: Undergraduate students with annual household income below 900,000 NTD.
-*   **Required Documents**: Household registration transcript, income statement.
-*   **Note**: Please apply within three months of the incident.
-
-### Living Allowance Grant [2]
-*   **Eligibility**: Must possess a low-income household certificate.
-*   **Contact Window**: Student Affairs Office.
-
-
-Scenario 2: Single scholarship found — Bullet Point List
-User Question: How do I claim the emergency medical subsidy?
-Response format example:
-Here is the relevant information I found:
-
-### Student Emergency Relief Fund
-*   **Conditions**: Students facing financial hardship due to accidents or hospitalization.
-*   **Amount**: Up to 20,000 NTD depending on the situation.
-*   **Required Documents**:
-    1. Medical diagnosis certificate.
-    2. Original medical receipts.
-*   **Note**: Please apply within 3 months of the incident.
+1. **Only recommend scholarships that genuinely match the user's conditions.** Skip and do not mention any that do not match.
+2. Select **at most 3** best-matching scholarships.
+3. If there are 2 or more, present a Markdown comparison table first, then detail each.
+4. If no relevant info found, politely inform the user.
 
 """,
         'rag_user': """User Question:
