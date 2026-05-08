@@ -5,6 +5,12 @@ export interface Context {
   score?: number;
 }
 
+export interface ThinkingStep {
+  step: string;
+  detail?: string;
+  status: 'running' | 'done';
+}
+
 export interface Message {
   role: 'user' | 'assistant';
   content: string;
@@ -12,6 +18,7 @@ export interface Message {
   logId?: string;
   chips?: string[];
   isStreaming?: boolean;
+  thinkingSteps?: ThinkingStep[];
 }
 
 export type Language = 'zh' | 'en';

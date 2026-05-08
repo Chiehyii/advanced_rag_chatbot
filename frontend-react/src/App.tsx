@@ -293,6 +293,24 @@ function App() {
                   const parsed = JSON.parse(chunk);
                   if (parsed.type === 'content') {
                     fullAnswer += parsed.data;
+                  } else if (parsed.type === 'thinking_step') {
+                    const stepData = parsed.data;
+                    setMessages(prev => {
+                      const newMessages = [...prev];
+                      const lastIdx = newMessages.length - 1;
+                      if (newMessages[lastIdx].role === 'assistant') {
+                        const existing = newMessages[lastIdx].thinkingSteps || [];
+                        // Replace last step if it was 'running' and this is a 'done' for same concept
+                        let updated = [...existing];
+                        if (stepData.status === 'done' && updated.length > 0 && updated[updated.length - 1].status === 'running') {
+                          updated[updated.length - 1] = stepData;
+                        } else {
+                          updated.push(stepData);
+                        }
+                        newMessages[lastIdx] = { ...newMessages[lastIdx], thinkingSteps: updated };
+                      }
+                      return newMessages;
+                    });
                   }
                 } catch (e) {
                   // Fallback for raw text

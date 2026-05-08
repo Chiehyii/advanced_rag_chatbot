@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { Message, Language } from '../types';
+import { Message, Language, ThinkingStep } from '../types';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import { ThumbsUp, ThumbsDown, Globe, ChevronDown, ChevronRight, BookOpen } from 'lucide-react';
+import { ThumbsUp, ThumbsDown, Globe, ChevronDown, ChevronRight, BookOpen, Loader2 } from 'lucide-react';
 import { translations } from '../App';
 
 interface MessageBubbleProps {
@@ -13,10 +13,11 @@ interface MessageBubbleProps {
 }
 
 export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedback, onChipClick, language = 'zh' }) => {
-  const { role, content, contexts, logId, chips, isStreaming } = message;
+  const { role, content, contexts, logId, chips, isStreaming, thinkingSteps } = message;
   const t = translations[language];
   const [feedbackState, setFeedbackState] = useState<'like' | 'dislike' | null>(null);
   const [isMobileExpanded, setIsMobileExpanded] = useState(false);
+  const [isThinkingCollapsed, setIsThinkingCollapsed] = useState(true);
 
   // [SEC-5] 使用 URL 建構子驗證協議，防止 javascript: / data: 等惡意 URL
   const sanitizeUrl = (raw: string | undefined | null): string => {
@@ -124,11 +125,47 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
       <div className="bot-message-content">
         <div className="message-body">
           <div className="bot-left-col">
-            {/* 3. 記得把 onClick={handleMessageClick} 移除，並且把 contexts 傳給 createMarkup */}
+            {/* Thinking steps or content */}
             <div
-              className={`message bot-message ${isStreaming && !content ? 'thinking' : ''}`}
-              dangerouslySetInnerHTML={content ? createMarkup(content, contexts || []) : { __html: 'Thinking...' }}
-            />
+              className="message bot-message"
+            >
+              {/* Thinking steps section — auto-collapsed when content starts */}
+              {thinkingSteps && thinkingSteps.length > 0 && (
+                <div className={`thinking-steps ${content ? 'collapsed' : 'expanded'}`}>
+                  {content ? (
+                    <button
+                      className="thinking-toggle"
+                      onClick={() => setIsThinkingCollapsed(!isThinkingCollapsed)}
+                    >
+                      {isThinkingCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+                      <span className="thinking-toggle-text">
+                        {thinkingSteps.filter(s => s.status === 'done').length} steps completed
+                      </span>
+                    </button>
+                  ) : null}
+                  {/* Show list when: no content yet (still thinking), OR content exists but user expanded */}
+                  {(!content || (content && !isThinkingCollapsed)) && (
+                    <div className="thinking-list">
+                      {thinkingSteps.map((step, idx) => (
+                        <div key={idx} className={`thinking-item thinking-${step.status}`}>
+                          {step.status === 'running' && (
+                            <span className="thinking-icon">
+                              <Loader2 size={14} className="spin" />
+                            </span>
+                          )}
+                          <span className="thinking-text">{step.step}</span>
+                          {step.detail && <span className="thinking-detail">{step.detail}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              {/* Main content */}
+              {content && (
+                <div dangerouslySetInnerHTML={createMarkup(content, contexts || [])} />
+              )}
+            </div>
             {logId && !isStreaming && (
               <div className="feedback-buttons">
                 <button

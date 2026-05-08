@@ -160,6 +160,11 @@ async def chat_endpoint(request: Request, chat_request: ChatRequest):
                     # The data is just the text chunk
                     sse_data = json.dumps({"type": "content", "data": data})
                     yield f"data: {sse_data}\n\n"
+
+                elif event_type == "thinking_step":
+                    # Send thinking/progress step to frontend
+                    sse_data = json.dumps({"type": "thinking_step", "data": data})
+                    yield f"data: {sse_data}\n\n"
                 
                 elif event_type == "final_data":
                     # Send a custom named event for the final payload

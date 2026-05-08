@@ -639,9 +639,104 @@ body {
   border-radius: 0;
 }
 
-.bot-message .thinking {
+/* ======== Thinking Steps ======== */
+.thinking-steps {
+  margin-bottom: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.thinking-steps.collapsed {
+  border-bottom: none;
+  margin-bottom: 15px;
+  padding-bottom: 0;
+}
+
+.thinking-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 0;
+  color: var(--text-muted);
+  font-family: var(--font-family);
+  font-size: 0.8rem;
+  transition: color 0.2s;
+}
+
+.thinking-toggle:hover {
+  color: var(--text-color);
+}
+
+.thinking-toggle-text {
   font-style: italic;
-  color: #888;
+}
+
+.thinking-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.thinking-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  padding: 3px 0;
+  color: var(--text-muted);
+  animation: fadeInStep 0.3s ease-out;
+}
+
+.thinking-item.thinking-done {
+  color: var(--text-color);
+}
+
+.thinking-icon {
+  display: flex;
+  align-items: center;
+  width: 16px;
+  flex-shrink: 0;
+}
+
+.thinking-text {
+  flex-shrink: 0;
+}
+
+.thinking-detail {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  opacity: 0.8;
+  margin-left: 4px;
+}
+
+/* Spinning animation for Loader2 icon */
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes fadeInStep {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .contexts {
@@ -1234,6 +1329,7 @@ body {
     overflow-y: hidden;
     -webkit-overflow-scrolling: touch;
   }
+
   .bot-message th,
   .bot-message td {
     min-width: 85px;

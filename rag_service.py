@@ -319,8 +319,25 @@ async def stream_chat_pipeline(question: str, history: list | None = None, lang:
 
 
 # ═══════════════════════════════════════════════════════════════
-# NEW: LangGraph Agent Pipeline
+# NEW: LangGraph Agent Pipeline (with thinking steps)
 # ═══════════════════════════════════════════════════════════════
+
+# Node name → i18n thinking step labels
+_STEP_LABELS = {
+    "zh": {
+        "analyze_and_extract": ("正在分析問題...", "分析完成"),
+        "retrieve": ("正在搜尋資料庫...", "搜尋完成"),
+        "generate": (None, None),
+        "small_talk": (None, None),
+    },
+    "en": {
+        "analyze_and_extract": ("Analyzing your question...", "Analysis complete"),
+        "retrieve": ("Searching database...", "Search complete"),
+        "generate": (None, None),
+        "small_talk": (None, None),
+    },
+}
+
 async def stream_agent_pipeline(
     question: str,
     history: list | None = None,
@@ -332,8 +349,8 @@ async def stream_agent_pipeline(
 ):
     """
     LangGraph Agent 版本的對話 Pipeline。
-    產出與 stream_chat_pipeline 相同的 SSE event 格式，
-    可直接作為 /chat 端點的 drop-in replacement。
+    使用 graph.astream() 逐節點串流，每個節點完成時 emit thinking_step 事件，
+    讓前端可以動態顯示 AI 的思考與檢索過程。
     """
     from langchain_core.messages import HumanMessage, AIMessage
     from agent.graph import graph
@@ -345,14 +362,12 @@ async def stream_agent_pipeline(
     contexts_for_logging = []
     result_data = {}
     stream_completed = False
+    labels = _STEP_LABELS.get(lang, _STEP_LABELS["zh"])
 
     try:
-        # 使用 session_id 作為 LangGraph 的 thread_id，實現跨輪次記憶
         thread_id = session_id or "default"
-        config = {"configurable": {"thread_id": thread_id}}
+        gconfig = {"configurable": {"thread_id": thread_id}}
 
-        # 組裝輸入 state：只傳入最新的 HumanMessage
-        # （LangGraph 的 MemorySaver + add_messages reducer 會自動合併歷史）
         input_state = {
             "messages": [HumanMessage(content=question)],
             "lang": lang,
@@ -362,20 +377,16 @@ async def stream_agent_pipeline(
             "user_id": user_id,
         }
 
-        # 如果前端傳入 history 且 Graph 尚無 checkpoint（首次），需要預載歷史
-        # 這確保了從舊 pipeline 切換過來時，歷史不會丟失
+        # 預載歷史（首次使用時）
         graph_state = None
         try:
-            graph_state = await asyncio.to_thread(
-                lambda: graph.get_state(config)
-            )
+            graph_state = await asyncio.to_thread(lambda: graph.get_state(gconfig))
         except Exception:
             pass
 
         has_checkpoint = graph_state and graph_state.values and graph_state.values.get("messages")
 
         if not has_checkpoint and history and len(history) > 0:
-            # 首次：把前端傳入的 history 轉成 LangGraph messages 一併送入
             pre_messages = []
             for msg in history:
                 role = msg.get("role", "")
@@ -384,24 +395,51 @@ async def stream_agent_pipeline(
                     pre_messages.append(HumanMessage(content=content))
                 elif role == "assistant":
                     pre_messages.append(AIMessage(content=content))
-            # 加上本次的問題
             pre_messages.append(HumanMessage(content=question))
             input_state["messages"] = pre_messages
 
-        # 執行 Graph
-        final_state = await graph.ainvoke(input_state, config)
+        # --- 使用 astream 逐節點串流 ---
+        cleaned_contexts = []
+        last_node = None
+        last_node_output = {}
 
-        # 從 final_state 中取得 AI 的最後一則回覆
-        ai_messages = [m for m in final_state.get("messages", []) if isinstance(m, AIMessage)]
-        if ai_messages:
-            full_answer = ai_messages[-1].content
-        else:
+        async for event in graph.astream(input_state, gconfig, stream_mode="updates"):
+            for node_name, node_output in event.items():
+                # 1) 上一個節點完成 → emit "done" step (使用上一個節點的 output)
+                if last_node and last_node != node_name:
+                    done_label = labels.get(last_node, (None, None))[1]
+                    if done_label:
+                        detail = _build_step_detail(last_node, last_node_output, lang)
+                        yield {"type": "thinking_step", "data": {"step": done_label, "detail": detail, "status": "done"}}
+
+                # 2) 當前節點開始 → emit "running" step
+                running_label = labels.get(node_name, (None, None))[0]
+                if running_label:
+                    yield {"type": "thinking_step", "data": {"step": running_label, "status": "running"}}
+
+                last_node = node_name
+                last_node_output = node_output
+
+                # 3) 抓取有用的 state 更新
+                if "retrieved_docs" in node_output:
+                    cleaned_contexts = node_output["retrieved_docs"]
+
+                if "messages" in node_output:
+                    for m in node_output["messages"]:
+                        if isinstance(m, AIMessage):
+                            full_answer = m.content
+
+        # emit final node "done"
+        if last_node:
+            done_label = labels.get(last_node, (None, None))[1]
+            if done_label:
+                detail = _build_step_detail(last_node, last_node_output, lang)
+                yield {"type": "thinking_step", "data": {"step": done_label, "detail": detail, "status": "done"}}
+
+        if not full_answer:
             full_answer = PROMPTS[lang]["no_result_answer"]
 
-        # 取得檢索到的文件
-        cleaned_contexts = final_state.get("retrieved_docs", [])
-
-        # 串流逐字送出 (模擬打字機效果)
+        # 串流逐字送出 (打字機效果)
         chunk_size = 4
         for i in range(0, len(full_answer), chunk_size):
             chunk = full_answer[i:i + chunk_size]
@@ -419,8 +457,7 @@ async def stream_agent_pipeline(
 
         contexts_for_logging = unique_display_contexts
         result_data = {"contexts": unique_display_contexts, "chips": []}
-        rephrased_question = question  # Agent 內部已經做了 profile-based 搜尋
-
+        rephrased_question = question
         stream_completed = True
 
     except Exception as e:
@@ -438,3 +475,36 @@ async def stream_agent_pipeline(
             request_id, session_id, user_id, result_data,
         )
         yield {"type": "final_data", "data": result_data}
+
+
+def _build_step_detail(node_name: str, node_output: dict, lang: str) -> str:
+    """為完成的節點生成額外的摘要資訊"""
+    if node_name == "analyze_and_extract":
+        intent = node_output.get("current_intent", "")
+        profile = node_output.get("user_profile", {})
+        if lang == "zh":
+            if intent == "small_talk":
+                return "意圖：一般對話"
+            parts = ["意圖：獎學金查詢"]
+            if profile.get("nationality"):
+                parts.append(f"國籍：{profile['nationality']}")
+            if profile.get("education_system"):
+                parts.append(f"學制：{profile['education_system']}")
+            return "｜".join(parts)
+        else:
+            if intent == "small_talk":
+                return "Intent: General chat"
+            parts = ["Intent: Scholarship"]
+            if profile.get("nationality"):
+                parts.append(f"Nationality: {profile['nationality']}")
+            if profile.get("education_system"):
+                parts.append(f"Level: {profile['education_system']}")
+            return " | ".join(parts)
+    elif node_name == "retrieve":
+        docs = node_output.get("retrieved_docs", [])
+        count = len(docs)
+        if lang == "zh":
+            return f"找到 {count} 筆相關文件"
+        else:
+            return f"Found {count} relevant documents"
+    return ""
