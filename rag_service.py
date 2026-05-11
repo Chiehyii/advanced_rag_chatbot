@@ -440,11 +440,10 @@ async def stream_agent_pipeline(
             full_answer = PROMPTS[lang]["no_result_answer"]
 
         # 串流逐字送出 (打字機效果)
-        chunk_size = 4
+        chunk_size = 20
         for i in range(0, len(full_answer), chunk_size):
             chunk = full_answer[i:i + chunk_size]
             yield {"type": "content", "data": chunk}
-            await asyncio.sleep(0.01)
 
         # 整理 unique contexts for display
         unique_display_contexts = []
