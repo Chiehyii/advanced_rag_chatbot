@@ -4,7 +4,7 @@ import { MessageBubble } from './MessageBubble';
 
 interface MessageListProps {
   messages: Message[];
-  onFeedback: (logId: string, type: 'like' | 'dislike' | null) => void;
+  onFeedback: (logId: string, feedbackToken: string, type: 'like' | 'dislike' | null) => void;
   onChipClick: (text: string) => void;
   language: Language;
 }

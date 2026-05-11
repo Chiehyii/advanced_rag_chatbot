@@ -1,10 +1,29 @@
 import json
+import hashlib
+import secrets
 import config
 from db import get_db_cursor
 from logger import get_logger
 from psycopg2 import sql as pg_sql
 
 logger = get_logger(__name__)
+_feedback_column_ready = False
+
+
+def _hash_feedback_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _ensure_feedback_column(cursor):
+    global _feedback_column_ready
+    if _feedback_column_ready:
+        return
+    cursor.execute(
+        pg_sql.SQL("ALTER TABLE {} ADD COLUMN IF NOT EXISTS feedback_token_hash VARCHAR(64);").format(
+            pg_sql.Identifier(config.DB_TABLE_NAME)
+        )
+    )
+    _feedback_column_ready = True
 
 def clean_retrieved_contexts(retrieved_docs: list):
     """
@@ -44,23 +63,28 @@ def log_to_db(question, rephrased_question, answer, contexts, latency_ms, usage,
         completion_tokens = usage.completion_tokens if usage else None
         total_tokens = usage.total_tokens if usage else None
 
+        feedback_token = secrets.token_urlsafe(32)
+        feedback_token_hash = _hash_feedback_token(feedback_token)
+
         insert_query = pg_sql.SQL("""INSERT INTO {}
-                         (request_id, session_id, user_id, question, rephrased_question, answer, retrieved_contexts, latency_ms, prompt_tokens, completion_tokens, total_tokens)
-                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id;""").format(
+                         (request_id, session_id, user_id, question, rephrased_question, answer, retrieved_contexts, latency_ms, prompt_tokens, completion_tokens, total_tokens, feedback_token_hash)
+                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id;""").format(
             pg_sql.Identifier(config.DB_TABLE_NAME)
         )
 
         with get_db_cursor(commit=True) as (conn, cursor):
+            _ensure_feedback_column(cursor)
             cursor.execute(insert_query, (
                 request_id, session_id, user_id,
                 question, rephrased_question, answer, 
                 json.dumps(contexts, ensure_ascii=False), 
-                latency_ms, prompt_tokens, completion_tokens, total_tokens
+                latency_ms, prompt_tokens, completion_tokens, total_tokens,
+                feedback_token_hash,
             ))
             log_id = cursor.fetchone()[0]
             
         logger.info(f"[DB] Successfully wrote question to PostgreSQL database, ID: {log_id}.")
-        return log_id
+        return {"log_id": log_id, "feedback_token": feedback_token}
     except Exception as e:
         logger.error(f"[DB] Failed to write to PostgreSQL database: {e}", exc_info=True)
         return None

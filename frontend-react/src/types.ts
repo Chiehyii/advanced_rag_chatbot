@@ -16,6 +16,7 @@ export interface Message {
   content: string;
   contexts?: Context[];
   logId?: string;
+  feedbackToken?: string;
   chips?: string[];
   isStreaming?: boolean;
   thinkingSteps?: ThinkingStep[];

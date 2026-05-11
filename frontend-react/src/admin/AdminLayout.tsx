@@ -32,7 +32,8 @@ export function AdminLayout({ onLogout }: AdminLayoutProps) {
     };
 
     const handleUnauthorized = useCallback(() => {
-        localStorage.removeItem('admin_jwt');
+        sessionStorage.removeItem('admin_jwt');
+        sessionStorage.removeItem('admin_refresh_jwt');
         onLogout();
         showToast('驗證過期，請重新登入', 'error');
     }, [onLogout]);
@@ -110,7 +111,7 @@ export function AdminLayout({ onLogout }: AdminLayoutProps) {
                         系統已連線
                     </div>
                     <button
-                        onClick={() => { localStorage.removeItem('admin_jwt'); localStorage.removeItem('admin_refresh_jwt'); onLogout(); }}
+                        onClick={() => { sessionStorage.removeItem('admin_jwt'); sessionStorage.removeItem('admin_refresh_jwt'); onLogout(); }}
                         style={{
                             background: 'none', border: '1px solid #cbd5e1', borderRadius: 8,
                             padding: '6px 14px', cursor: 'pointer', fontSize: '0.85rem', color: '#64748b',

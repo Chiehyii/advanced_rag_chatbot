@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Message, Language, ThinkingStep } from '../types';
+import { Message, Language } from '../types';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { ThumbsUp, ThumbsDown, Globe, ChevronDown, ChevronRight, BookOpen, Loader2 } from 'lucide-react';
@@ -7,13 +7,13 @@ import { translations } from '../App';
 
 interface MessageBubbleProps {
   message: Message;
-  onFeedback: (logId: string, type: 'like' | 'dislike' | null) => void;
+  onFeedback: (logId: string, feedbackToken: string, type: 'like' | 'dislike' | null) => void;
   onChipClick: (text: string) => void;
   language?: Language;
 }
 
 export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedback, onChipClick, language = 'zh' }) => {
-  const { role, content, contexts, logId, chips, isStreaming, thinkingSteps } = message;
+  const { role, content, contexts, logId, feedbackToken, chips, isStreaming, thinkingSteps } = message;
   const t = translations[language];
   const [feedbackState, setFeedbackState] = useState<'like' | 'dislike' | null>(null);
   const [isMobileExpanded, setIsMobileExpanded] = useState(false);
@@ -122,14 +122,14 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
                 <div dangerouslySetInnerHTML={createMarkup(content, contexts || [])} />
               )}
             </div>
-            {logId && !isStreaming && (
+            {logId && feedbackToken && !isStreaming && (
               <div className="feedback-buttons">
                 <button
                   className={`feedback-btn like-btn ${feedbackState === 'like' ? 'active' : ''}`}
                   onClick={() => {
                     const newState = feedbackState === 'like' ? null : 'like';
                     setFeedbackState(newState);
-                    onFeedback(logId, newState);
+                    onFeedback(logId, feedbackToken, newState);
                   }}
                   title="Satisfied"
                 >
@@ -140,7 +140,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
                   onClick={() => {
                     const newState = feedbackState === 'dislike' ? null : 'dislike';
                     setFeedbackState(newState);
-                    onFeedback(logId, newState);
+                    onFeedback(logId, feedbackToken, newState);
                   }}
                   title="Dissatisfied"
                 >

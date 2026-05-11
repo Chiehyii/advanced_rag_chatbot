@@ -61,7 +61,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let filterTagsChoices: any = null;
     let filterIdentityChoices: any = null;
 
-    let authToken = localStorage.getItem('admin_jwt') || '';
+    let authToken = sessionStorage.getItem('admin_jwt') || '';
 
     // --- Init ---
     checkAuth();
@@ -106,7 +106,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function logout() {
         authToken = '';
-        localStorage.removeItem('admin_jwt');
+        sessionStorage.removeItem('admin_jwt');
         loginOverlay.classList.add('active');
         showToast('驗證過期，請重新登入', 'error');
     }
@@ -136,7 +136,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const data = await res.json();
             authToken = data.access_token;
-            localStorage.setItem('admin_jwt', authToken);
+            sessionStorage.setItem('admin_jwt', authToken);
 
             loginOverlay.classList.remove('active');
             showToast('登入成功', 'success');

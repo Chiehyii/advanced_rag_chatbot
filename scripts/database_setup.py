@@ -58,7 +58,8 @@ def create_database_and_table():
             completion_tokens INTEGER,
             total_tokens INTEGER,
             feedback_type TEXT,
-            feedback_text TEXT
+            feedback_text TEXT,
+            feedback_token_hash VARCHAR(64)
         );
         """).format(table=sql.Identifier(TABLE_NAME))
 
@@ -96,11 +97,23 @@ def create_database_and_table():
             sql.SQL("ALTER TABLE {table} ADD COLUMN IF NOT EXISTS request_id VARCHAR(36);").format(table=sql.Identifier(TABLE_NAME)),
             sql.SQL("ALTER TABLE {table} ADD COLUMN IF NOT EXISTS session_id VARCHAR(36);").format(table=sql.Identifier(TABLE_NAME)),
             sql.SQL("ALTER TABLE {table} ADD COLUMN IF NOT EXISTS user_id VARCHAR(36);").format(table=sql.Identifier(TABLE_NAME)),
+            sql.SQL("ALTER TABLE {table} ADD COLUMN IF NOT EXISTS feedback_token_hash VARCHAR(64);").format(table=sql.Identifier(TABLE_NAME)),
             sql.SQL("ALTER TABLE tcuscholarships ADD COLUMN IF NOT EXISTS registered_residence JSONB;"),
             sql.SQL("ALTER TABLE tcuscholarships ADD COLUMN IF NOT EXISTS nationality JSONB;"),
         ]
         for mq in migration_queries:
             cursor.execute(mq)
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS admin_refresh_tokens (
+            jti VARCHAR(64) PRIMARY KEY,
+            token_hash VARCHAR(64) NOT NULL,
+            subject VARCHAR(255) NOT NULL,
+            expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            revoked_at TIMESTAMP WITH TIME ZONE,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
 
         # Commit the changes
         conn.commit()

@@ -278,6 +278,7 @@ function App() {
                           isStreaming: false,
                           contexts: finalData.contexts || [],
                           logId: finalData.log_id,
+                          feedbackToken: finalData.feedback_token,
                           chips: finalData.chips || []
                         };
                       }
@@ -384,25 +385,29 @@ function App() {
   const handleRemoveTag = (scholarshipCode: string) => {
     setSelectedTags(prev => prev.filter(t => t.scholarship_code !== scholarshipCode));
   };
-  const handleFeedback = async (logId: string, type: 'like' | 'dislike' | null) => {
+  const handleFeedback = async (logId: string, feedbackToken: string, type: 'like' | 'dislike' | null) => {
     // Send feedback to backend
     await fetch(`${API_BASE_URL}/feedback`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ log_id: logId, feedback_type: type })
+      body: JSON.stringify({ log_id: logId, feedback_token: feedbackToken, feedback_type: type })
     }).catch(err => console.error("Error sending feedback:", err));
     if (type === 'dislike') {
       setCurrentFeedbackLogId(logId);
+      sessionStorage.setItem(`feedback_token_${logId}`, feedbackToken);
       setIsFeedbackOpen(true);
     }
   };
   const handleFeedbackSubmit = async (feedbackText: string) => {
     if (!currentFeedbackLogId) return;
+    const feedbackToken = sessionStorage.getItem(`feedback_token_${currentFeedbackLogId}`);
+    if (!feedbackToken) return;
     await fetch(`${API_BASE_URL}/feedback`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         log_id: currentFeedbackLogId,
+        feedback_token: feedbackToken,
         feedback_type: 'dislike',
         feedback_text: feedbackText
       })

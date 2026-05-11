@@ -25,6 +25,26 @@ logger = get_logger(__name__)
 openai_client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
 
 
+def _safe_milvus_literal(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    if not cleaned or len(cleaned) > 80:
+        return None
+    if any(ord(ch) < 32 for ch in cleaned):
+        return None
+    if any(ch in cleaned for ch in ['"', "\\", "[", "]", "(", ")", ";"]):
+        return None
+    return cleaned
+
+
+def _quote_milvus_literal(value: object) -> str | None:
+    cleaned = _safe_milvus_literal(value)
+    if cleaned is None:
+        return None
+    return '"' + cleaned + '"'
+
+
 def _detect_language(text: str) -> str:
     """簡易語言偵測：ASCII 字元佔比 > 70% 視為英文，否則視為中文。"""
     if not text:
@@ -168,13 +188,32 @@ def build_milvus_expr_from_profile(profile: dict, title_filter: list[str] | None
     - identity: 使用者身分 OR "一般生"
     """
     if title_filter and len(title_filter) > 0:
-        safe_titles = [t.replace('"', '\\"') for t in title_filter[:3]]
-        title_exprs = ", ".join([f'"{t}.md"' for t in safe_titles])
+        safe_titles = []
+        for title in title_filter[:3]:
+            quoted = _quote_milvus_literal(f"{title}.md")
+            if quoted:
+                safe_titles.append(quoted)
+        if not safe_titles:
+            logger.warning("[Filter] Title filter values rejected by validation.")
+            return ""
+        title_exprs = ", ".join(safe_titles)
         expr = f"source_file in [{title_exprs}]"
         logger.info(f"[Filter] Title filter override: {expr}")
         return expr
 
     parts = []
+
+    safe_profile = {}
+    for key in ("registered_residence", "nationality", "education_system"):
+        safe_value = _safe_milvus_literal(profile.get(key))
+        if safe_value:
+            safe_profile[key] = safe_value
+    identities = profile.get("identity")
+    if isinstance(identities, list):
+        safe_profile["identity"] = [
+            safe_value for safe_value in (_safe_milvus_literal(v) for v in identities) if safe_value
+        ]
+    profile = safe_profile
 
     residence = profile.get("registered_residence")
     if residence and residence != "不限":
@@ -193,9 +232,17 @@ def build_milvus_expr_from_profile(profile: dict, title_filter: list[str] | None
 
     identities = profile.get("identity")
     if identities and isinstance(identities, list):
-        special_ids = [i for i in identities if i != "一般生"]
-        if special_ids:
-            all_ids = special_ids + ["一般生"]
+        # 畢業生是獨立身分，不應同時匹配一般生的獎學金
+        # 其他特殊身分（如低收入戶、原住民）仍然可以申請一般生的獎學金
+        has_graduate = "畢業生" in identities
+        special_ids = [i for i in identities if i not in ("一般生", "畢業生")]
+        if has_graduate and not special_ids:
+            # 純畢業生：只搜尋畢業生獎學金
+            parts.append('ARRAY_CONTAINS(identity, "畢業生")')
+        elif special_ids:
+            all_ids = special_ids + (["一般生"] if not has_graduate else [])
+            if has_graduate:
+                all_ids.append("畢業生")
             vals_str = ", ".join([f'"{v}"' for v in all_ids])
             parts.append(f'ARRAY_CONTAINS_ANY(identity, [{vals_str}])')
         else:

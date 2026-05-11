@@ -1,14 +1,13 @@
 import hashlib
 import json
 import asyncio
-import aiohttp
 from bs4 import BeautifulSoup
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from datetime import datetime, timezone
 import config
 from db import get_db_cursor
-from utils import is_safe_url
+from utils import safe_fetch_text_async
 from logger import get_logger
 from notifier import send_line_message
 from prompts import PROMPTS
@@ -22,15 +21,14 @@ logger = get_logger(__name__)
 def compute_md5(text: str) -> str:
     return hashlib.md5(text.encode('utf-8')).hexdigest()
 
-async def _fetch_url_text(session: aiohttp.ClientSession, url: str) -> str:
-    if not is_safe_url(url):
-        logger.warning(f"[Scheduler] Unsafe URL blocked: {url}")
-        return ""
+async def _fetch_url_text(url: str) -> str:
     try:
-        async with session.get(url, timeout=15) as resp:
-            content = await resp.read()
-            soup = BeautifulSoup(content, "html.parser")
-            return soup.get_text(separator="\n", strip=True)
+        content = await safe_fetch_text_async(url, timeout=15)
+        soup = BeautifulSoup(content, "html.parser")
+        return soup.get_text(separator="\n", strip=True)
+    except ValueError as e:
+        logger.warning(f"[Scheduler] Unsafe URL blocked: {url} ({e})")
+        return ""
     except Exception as e:
         logger.warning(f"[Scheduler] Failed to scrape {url}: {type(e).__name__} - {e}")
         try:
@@ -46,16 +44,15 @@ async def _async_run_inspection(rows):
     # 限制最大並發數為 10
     sem = asyncio.Semaphore(10)
     
-    async def fetch_row(session, row):
+    async def fetch_row(row):
         scholarship_code, title, url, old_hash = row
         async with sem:
-            latest_text = await _fetch_url_text(session, url)
+            latest_text = await _fetch_url_text(url)
         return row, latest_text
     
-    async with aiohttp.ClientSession() as session:
-        tasks = [fetch_row(session, row) for row in rows]
-        # 並發執行，某個失敗不會中斷全域
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+    tasks = [fetch_row(row) for row in rows]
+    # 並發執行，某個失敗不會中斷全域
+    results = await asyncio.gather(*tasks, return_exceptions=True)
         
     for res in results:
         if isinstance(res, Exception):

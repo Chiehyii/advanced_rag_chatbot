@@ -1,7 +1,8 @@
 import re
 import uuid
 import json
-import requests
+import hashlib
+import secrets
 from bs4 import BeautifulSoup
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Request
@@ -10,11 +11,10 @@ from slowapi import Limiter
 from pydantic import BaseModel
 from openai import OpenAI
 import config
-import hashlib
 from datetime import datetime, timedelta, timezone
 import jwt
 from psycopg2 import sql as pg_sql
-from utils import is_safe_url
+from utils import safe_fetch_text
 from logger import get_logger
 from prompts import PROMPTS
 from milvus_service import init_milvus_collection, _insert_chunks_to_milvus
@@ -25,6 +25,7 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api", tags=["admin"])
 openai_client = OpenAI(api_key=config.OPENAI_API_KEY)
+_auth_tables_ready = False
 
 def _get_real_ip(request: Request) -> str:
     forwarded_for = request.headers.get("X-Forwarded-For", "")
@@ -69,6 +70,45 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None, toke
     to_encode.update({"exp": expire, "type": token_type})
     encoded_jwt = jwt.encode(to_encode, config.JWT_SECRET_KEY, algorithm=config.ALGORITHM)
     return encoded_jwt
+
+def _hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+def _ensure_auth_tables():
+    global _auth_tables_ready
+    if _auth_tables_ready:
+        return
+    with get_db_cursor(commit=True) as (conn, cursor):
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS admin_refresh_tokens (
+                jti VARCHAR(64) PRIMARY KEY,
+                token_hash VARCHAR(64) NOT NULL,
+                subject VARCHAR(255) NOT NULL,
+                expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+                revoked_at TIMESTAMP WITH TIME ZONE,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+    _auth_tables_ready = True
+
+def _issue_refresh_token(username: str, expires_delta: timedelta) -> str:
+    _ensure_auth_tables()
+    jti = secrets.token_urlsafe(24)
+    expires_at = datetime.now(timezone.utc) + expires_delta
+    token = create_access_token(
+        data={"sub": username, "jti": jti},
+        expires_delta=expires_delta,
+        token_type="refresh",
+    )
+    with get_db_cursor(commit=True) as (conn, cursor):
+        cursor.execute(
+            """
+            INSERT INTO admin_refresh_tokens (jti, token_hash, subject, expires_at)
+            VALUES (%s, %s, %s, %s)
+            """,
+            (jti, _hash_token(token), username, expires_at),
+        )
+    return token
 
 def verify_admin(token: str = Depends(oauth2_scheme)):
     credentials_exception = HTTPException(
@@ -290,9 +330,7 @@ async def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends
     )
     
     refresh_token_expires = timedelta(days=config.REFRESH_TOKEN_EXPIRE_DAYS)
-    refresh_token = create_access_token(
-        data={"sub": config.ADMIN_USERNAME}, expires_delta=refresh_token_expires, token_type="refresh"
-    )
+    refresh_token = _issue_refresh_token(config.ADMIN_USERNAME, refresh_token_expires)
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
@@ -314,14 +352,36 @@ async def refresh_token(request: Request, refresh_request: RefreshTokenRequest):
         payload = jwt.decode(refresh_request.refresh_token, config.JWT_SECRET_KEY, algorithms=[config.ALGORITHM])
         username: str = payload.get("sub")
         token_type: str = payload.get("type")
-        if username is None or username != config.ADMIN_USERNAME or token_type != "refresh":
+        jti: str = payload.get("jti")
+        if username is None or username != config.ADMIN_USERNAME or token_type != "refresh" or not jti:
             raise credentials_exception
+
+        _ensure_auth_tables()
+        token_hash = _hash_token(refresh_request.refresh_token)
+        with get_db_cursor(commit=True) as (conn, cursor):
+            cursor.execute(
+                """
+                UPDATE admin_refresh_tokens
+                SET revoked_at = CURRENT_TIMESTAMP
+                WHERE jti = %s
+                  AND token_hash = %s
+                  AND subject = %s
+                  AND revoked_at IS NULL
+                  AND expires_at > CURRENT_TIMESTAMP
+                RETURNING jti;
+                """,
+                (jti, token_hash, username),
+            )
+            if cursor.fetchone() is None:
+                raise credentials_exception
             
         access_token_expires = timedelta(minutes=config.ACCESS_TOKEN_EXPIRE_MINUTES)
         access_token = create_access_token(
             data={"sub": config.ADMIN_USERNAME}, expires_delta=access_token_expires, token_type="access"
         )
-        return {"access_token": access_token, "token_type": "bearer"}
+        refresh_token_expires = timedelta(days=config.REFRESH_TOKEN_EXPIRE_DAYS)
+        new_refresh_token = _issue_refresh_token(config.ADMIN_USERNAME, refresh_token_expires)
+        return {"access_token": access_token, "refresh_token": new_refresh_token, "token_type": "bearer"}
     except jwt.InvalidTokenError:
         raise credentials_exception
 
@@ -435,14 +495,14 @@ def extract_scholarship_info(request: ExtractRequest, current_admin: str = Depen
     content_to_process = ""
     
     if request.url:
-        if not is_safe_url(request.url):
-            raise HTTPException(status_code=400, detail="The provided URL is not safe to scrape (disallowed IP/domain).")
         try:
-            resp = requests.get(request.url, timeout=10)
-            soup = BeautifulSoup(resp.content, "html.parser")
+            fetched_text = safe_fetch_text(request.url, timeout=10)
+            soup = BeautifulSoup(fetched_text, "html.parser")
             # Extract basic text
             content_to_process = soup.get_text(separator="\n", strip=True)
             content_to_process = f"URL: {request.url}\n\nContent:\n{content_to_process}"
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Failed to load URL: {e}")
     else:

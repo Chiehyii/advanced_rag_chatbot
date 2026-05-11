@@ -15,6 +15,7 @@ from psycopg2 import sql as pg_sql
 import traceback
 import json
 import time
+import hashlib
 from fastapi.responses import StreamingResponse, JSONResponse
 from rag_service import stream_chat_pipeline, stream_agent_pipeline
 import admin_api
@@ -136,6 +137,7 @@ class ChatRequest(BaseModel):
 class FeedbackRequest(BaseModel):
     """Request model for submitting feedback."""
     log_id: int = Field(..., ge=1)
+    feedback_token: str = Field(..., min_length=32, max_length=128)
     feedback_type: Optional[str] = Field(None, pattern='^(like|dislike)$')
     feedback_text: Optional[str] = Field(None, max_length=500)
 
@@ -226,7 +228,7 @@ async def feedback_endpoint(request: Request, feedback_request: FeedbackRequest)
     # 📝 INFO：記錄收到回饋
     logger.info(f"[Feedback] Received feedback for log_id: {feedback_request.log_id}")
     # Move blocking DB operations into a sync helper and run it in a thread
-    def _update_feedback(log_id: int, feedback_type: str | None, feedback_text: str | None):
+    def _update_feedback(log_id: int, feedback_token: str, feedback_type: str | None, feedback_text: str | None):
         if not config.DB_POOL:
             return False
 
@@ -236,13 +238,15 @@ async def feedback_endpoint(request: Request, feedback_request: FeedbackRequest)
         try:
             cursor = conn.cursor()
             
+            feedback_token_hash = hashlib.sha256(feedback_token.encode("utf-8")).hexdigest()
             update_query = pg_sql.SQL("""UPDATE {}
                              SET feedback_type = %s, feedback_text = %s
-                             WHERE id = %s;""").format(pg_sql.Identifier(config.DB_TABLE_NAME))
+                             WHERE id = %s
+                               AND feedback_token_hash = %s;""").format(pg_sql.Identifier(config.DB_TABLE_NAME))
 
-            cursor.execute(update_query, (feedback_type, feedback_text, log_id))
+            cursor.execute(update_query, (feedback_type, feedback_text, log_id, feedback_token_hash))
             conn.commit()
-            return True
+            return cursor.rowcount == 1
         except psycopg2.Error as e:
             # 🚨 ERROR：資料庫寫入錯誤
             logger.error(f"[DB] Database error in /feedback helper: {e}", exc_info=True)
@@ -255,10 +259,16 @@ async def feedback_endpoint(request: Request, feedback_request: FeedbackRequest)
                 config.DB_POOL.putconn(conn)
 
     # Run the DB update in a thread to avoid blocking the event loop
-    ok = await asyncio.to_thread(_update_feedback, feedback_request.log_id, feedback_request.feedback_type, feedback_request.feedback_text)
+    ok = await asyncio.to_thread(
+        _update_feedback,
+        feedback_request.log_id,
+        feedback_request.feedback_token,
+        feedback_request.feedback_type,
+        feedback_request.feedback_text,
+    )
     if not ok:
         # Use HTTPException to return proper status code
-        raise HTTPException(status_code=500, detail="Failed to record feedback")
+        raise HTTPException(status_code=403, detail="Invalid feedback token")
 
     # 📝 INFO：記錄成功更新回饋
     logger.info(f"[Feedback] Successfully updated feedback for log_id: {feedback_request.log_id}")

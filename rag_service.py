@@ -14,6 +14,19 @@ from milvus_service import perform_hybrid_search, perform_search
 
 logger = get_logger(__name__)
 
+
+def _safe_filter_title(title: object) -> str | None:
+    if not isinstance(title, str):
+        return None
+    cleaned = title.strip()
+    if not cleaned or len(cleaned) > 120:
+        return None
+    if any(ord(ch) < 32 for ch in cleaned):
+        return None
+    if any(ch in cleaned for ch in ['"', "\\", "[", "]", "(", ")", ";"]):
+        return None
+    return cleaned
+
 # 使用集中化的設定來初始化 clients
 openai_client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
 milvus_client = MilvusClient(
@@ -190,7 +203,10 @@ async def _preprocess_query(rephrased_question: str, lang: str, title_filter: li
 
     if title_filter and len(title_filter) > 0:
         intent = "scholarship"
-        safe_titles = [t.replace('"', '\\"') for t in title_filter[:3]]
+        safe_titles = [_safe_filter_title(t) for t in title_filter[:3]]
+        safe_titles = [t for t in safe_titles if t]
+        if not safe_titles:
+            return intent, "", rephrased_question, rephrased_question, await get_embedding(rephrased_question)
         title_exprs = ", ".join([f'"{t}.md"' for t in safe_titles])
         expr = f"source_file in [{title_exprs}]"
         logger.info(f"[Title Filter] User selected tags: {title_filter} → Milvus expr: {expr}")
@@ -237,13 +253,14 @@ async def _log_interaction_to_db(stream_completed: bool, usage_data: dict, origi
             usage = usage_data.get("usage")
             if usage:
                 logger.info(f"[Token Usage] prompt={usage.prompt_tokens}, completion={usage.completion_tokens}, total={usage.total_tokens}")
-            log_id = await asyncio.to_thread(log_to_db, original_question, rephrased_question, full_answer, contexts_for_logging, latency_ms, usage, request_id, session_id, user_id)
+            log_result = await asyncio.to_thread(log_to_db, original_question, rephrased_question, full_answer, contexts_for_logging, latency_ms, usage, request_id, session_id, user_id)
         except Exception as e:
             logger.error(f"[DB] log_to_db failed in thread: {e}", exc_info=True)
-            log_id = None
+            log_result = None
 
-        if log_id:
-            result_data["log_id"] = log_id
+        if log_result:
+            result_data["log_id"] = log_result["log_id"]
+            result_data["feedback_token"] = log_result["feedback_token"]
     else:
         logger.warning(f"[DB] Stream did not complete (client disconnected?), skipping DB log.")
     return result_data

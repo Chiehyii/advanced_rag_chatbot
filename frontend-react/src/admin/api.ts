@@ -5,9 +5,9 @@ export async function authFetch(url: string, options: RequestInit = {}): Promise
     const headers = new Headers(options.headers);
     headers.set('Authorization', `Bearer ${getToken()}`);
     const fullUrl = url.startsWith('/') ? `${API_BASE_URL}${url}` : url;
-    
+
     let res = await fetch(fullUrl, { ...options, headers });
-    
+
     if (res.status === 401) {
         const refreshToken = sessionStorage.getItem('admin_refresh_jwt');
         if (refreshToken) {
@@ -17,10 +17,13 @@ export async function authFetch(url: string, options: RequestInit = {}): Promise
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ refresh_token: refreshToken })
                 });
-                
+
                 if (refreshRes.ok) {
                     const data = await refreshRes.json();
                     sessionStorage.setItem('admin_jwt', data.access_token);
+                    if (data.refresh_token) {
+                        sessionStorage.setItem('admin_refresh_jwt', data.refresh_token);
+                    }
                     // Retry original request with new token
                     headers.set('Authorization', `Bearer ${data.access_token}`);
                     res = await fetch(fullUrl, { ...options, headers });
@@ -34,7 +37,7 @@ export async function authFetch(url: string, options: RequestInit = {}): Promise
             }
         }
     }
-    
+
     return res;
 }
 export async function apiLogin(username: string, password: string): Promise<string> {
@@ -141,4 +144,4 @@ export async function apiGetDashboardRecent(limit: number = 20) {
     const result = await res.json();
     if (result.status !== 'success') throw new Error('Failed to fetch dashboard recent');
     return result.data;
-}
+}
