@@ -74,6 +74,7 @@ async def analyze_and_extract_node(state: AgentState) -> dict:
             "current_intent": "scholarship",
             "user_profile": existing_profile,
             "_profile_sufficient": True,
+            "_usage": None,
         }
 
     # 把 messages 序列化為文字
@@ -104,6 +105,7 @@ async def analyze_and_extract_node(state: AgentState) -> dict:
                 "current_intent": "scholarship",
                 "user_profile": existing_profile,
                 "_profile_sufficient": False,
+                "_usage": completion.usage,
             }
 
         # 設定意圖
@@ -116,6 +118,7 @@ async def analyze_and_extract_node(state: AgentState) -> dict:
                 "current_intent": "small_talk",
                 "user_profile": existing_profile,
                 "_profile_sufficient": False,
+                "_usage": completion.usage,
             }
 
         # scholarship：合併到現有 profile（新值覆蓋舊值，但不清除舊的）
@@ -138,6 +141,7 @@ async def analyze_and_extract_node(state: AgentState) -> dict:
             "current_intent": "scholarship",
             "user_profile": new_profile,
             "_profile_sufficient": extracted.is_sufficient,
+            "_usage": completion.usage,
         }
 
     except Exception as e:
@@ -146,6 +150,7 @@ async def analyze_and_extract_node(state: AgentState) -> dict:
             "current_intent": "scholarship",
             "user_profile": existing_profile,
             "_profile_sufficient": False,
+            "_usage": None,
         }
 
 
@@ -360,7 +365,7 @@ async def generate_node(state: AgentState) -> dict:
     answer = response.choices[0].message.content.strip()
     logger.info(f"[Generate] Answer length: {len(answer)} chars, profile_sufficient={profile_sufficient}")
 
-    return {"messages": [AIMessage(content=answer)]}
+    return {"messages": [AIMessage(content=answer)], "_usage": response.usage}
 
 
 # ─────────────────────────────────────────
@@ -401,4 +406,4 @@ async def small_talk_node(state: AgentState) -> dict:
     )
     answer = response.choices[0].message.content.strip()
     logger.info(f"[SmallTalk] Answer: {answer[:80]}...")
-    return {"messages": [AIMessage(content=answer)], "retrieved_docs": []}
+    return {"messages": [AIMessage(content=answer)], "retrieved_docs": [], "_usage": response.usage}

@@ -355,6 +355,7 @@ async def stream_agent_pipeline(
     from langchain_core.messages import HumanMessage, AIMessage
     from agent.graph import graph
 
+    from types import SimpleNamespace
     start_time = time.time()
     full_answer = ""
     original_question = question
@@ -363,6 +364,7 @@ async def stream_agent_pipeline(
     result_data = {}
     stream_completed = False
     labels = _STEP_LABELS.get(lang, _STEP_LABELS["zh"])
+    _token_acc = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
     try:
         thread_id = session_id or "default"
@@ -429,6 +431,13 @@ async def stream_agent_pipeline(
                         if isinstance(m, AIMessage):
                             full_answer = m.content
 
+                # 累加各 node 的 token 使用量
+                node_usage = node_output.get("_usage")
+                if node_usage:
+                    _token_acc["prompt_tokens"] += node_usage.prompt_tokens or 0
+                    _token_acc["completion_tokens"] += node_usage.completion_tokens or 0
+                    _token_acc["total_tokens"] += node_usage.total_tokens or 0
+
         # emit final node "done"
         if last_node:
             done_label = labels.get(last_node, (None, None))[1]
@@ -468,8 +477,9 @@ async def stream_agent_pipeline(
         latency_ms = (time.time() - start_time) * 1000
         logger.info(f"[Agent] Total latency: {latency_ms:.2f} ms")
 
+        _usage_obj = SimpleNamespace(**_token_acc) if _token_acc["total_tokens"] > 0 else None
         result_data = await _log_interaction_to_db(
-            stream_completed, {}, original_question, rephrased_question,
+            stream_completed, {"usage": _usage_obj}, original_question, rephrased_question,
             full_answer, contexts_for_logging, latency_ms,
             request_id, session_id, user_id, result_data,
         )
