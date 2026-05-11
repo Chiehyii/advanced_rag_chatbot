@@ -14,6 +14,7 @@ import config
 import hashlib
 from datetime import datetime, timedelta, timezone
 import jwt
+from psycopg2 import sql as pg_sql
 from utils import is_safe_url
 from logger import get_logger
 from prompts import PROMPTS
@@ -89,7 +90,7 @@ def dashboard_summary(current_admin: str = Depends(verify_admin)):
         with get_db_cursor() as (conn, cursor):
             table = config.DB_TABLE_NAME
             # --- 基礎 KPI ---
-            cursor.execute(f"""
+            cursor.execute(pg_sql.SQL("""
                 SELECT
                     COUNT(*) AS today_queries,
                     COUNT(DISTINCT user_id) AS unique_users,
@@ -97,9 +98,9 @@ def dashboard_summary(current_admin: str = Depends(verify_admin)):
                     COALESCE(SUM(total_tokens), 0) AS total_tokens,
                     COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
                     COALESCE(SUM(completion_tokens), 0) AS completion_tokens
-                FROM {table}
+                FROM {}
                 WHERE timestamp::date = CURRENT_DATE;
-            """)
+            """).format(pg_sql.Identifier(table)))
             row = cursor.fetchone()
             today_queries = row[0] or 0
             unique_users = row[1] or 0
@@ -109,29 +110,29 @@ def dashboard_summary(current_admin: str = Depends(verify_admin)):
             completion_tokens = int(row[5] or 0)
 
             # --- 滿意度 ---
-            cursor.execute(f"""
+            cursor.execute(pg_sql.SQL("""
                 SELECT
                     COUNT(*) FILTER (WHERE feedback_type = 'like') AS likes,
                     COUNT(*) FILTER (WHERE feedback_type IS NOT NULL AND feedback_type != '') AS total_feedback
-                FROM {table}
+                FROM {}
                 WHERE timestamp::date = CURRENT_DATE;
-            """)
+            """).format(pg_sql.Identifier(table)))
             fb = cursor.fetchone()
             likes = fb[0] or 0
             total_feedback = fb[1] or 0
             satisfaction = round(likes / total_feedback, 2) if total_feedback > 0 else None
 
             # --- Peak RPM (今日每分鐘最高請求數) ---
-            cursor.execute(f"""
+            cursor.execute(pg_sql.SQL("""
                 SELECT
                     COUNT(*) AS cnt,
                     date_trunc('minute', timestamp) AS minute_bucket
-                FROM {table}
+                FROM {}
                 WHERE timestamp::date = CURRENT_DATE
                 GROUP BY minute_bucket
                 ORDER BY cnt DESC
                 LIMIT 1;
-            """)
+            """).format(pg_sql.Identifier(table)))
             peak_row = cursor.fetchone()
             peak_rpm = int(peak_row[0]) if peak_row else 0
             peak_rpm_time = peak_row[1].strftime("%H:%M") if peak_row else None
@@ -181,18 +182,18 @@ def dashboard_trends(
     try:
         with get_db_cursor() as (conn, cursor):
             table = config.DB_TABLE_NAME
-            cursor.execute(f"""
+            cursor.execute(pg_sql.SQL("""
                 SELECT
                     timestamp::date AS day,
                     COUNT(*) AS queries,
                     COALESCE(SUM(total_tokens), 0) AS tokens,
                     COUNT(DISTINCT user_id) AS unique_users,
                     COALESCE(AVG(latency_ms), 0) AS avg_latency
-                FROM {table}
+                FROM {}
                 WHERE timestamp::date >= %s AND timestamp::date <= %s
                 GROUP BY day
                 ORDER BY day;
-            """, (d_start.isoformat(), d_end.isoformat()))
+            """).format(pg_sql.Identifier(table)), (d_start.isoformat(), d_end.isoformat()))
             rows = cursor.fetchall()
             labels = [r[0].strftime("%m/%d") for r in rows]
             queries = [r[1] for r in rows]
@@ -223,12 +224,12 @@ def dashboard_recent(limit: int = 20, current_admin: str = Depends(verify_admin)
     try:
         with get_db_cursor() as (conn, cursor):
             table = config.DB_TABLE_NAME
-            cursor.execute(f"""
+            cursor.execute(pg_sql.SQL("""
                 SELECT id, timestamp, question, answer, latency_ms, total_tokens, feedback_type
-                FROM {table}
+                FROM {}
                 ORDER BY timestamp DESC
                 LIMIT %s;
-            """, (limit,))
+            """).format(pg_sql.Identifier(table)), (limit,))
             rows = cursor.fetchall()
             result = []
             for r in rows:
@@ -468,6 +469,7 @@ def extract_scholarship_info(request: ExtractRequest, current_admin: str = Depen
 
 @router.post("/scholarships")
 def save_scholarship(form: ScholarshipForm, current_admin: str = Depends(verify_admin)):
+    validate_scholarship_code(form.scholarship_code)  # [SEC-2]
     # 1. Save to PostgreSQL
     try:
         new_hash, current_time = _get_hash_if_url(form.link)

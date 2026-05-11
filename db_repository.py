@@ -2,6 +2,7 @@ import json
 import config
 from db import get_db_cursor
 from logger import get_logger
+from psycopg2 import sql as pg_sql
 
 logger = get_logger(__name__)
 
@@ -43,10 +44,12 @@ def log_to_db(question, rephrased_question, answer, contexts, latency_ms, usage,
         completion_tokens = usage.completion_tokens if usage else None
         total_tokens = usage.total_tokens if usage else None
 
-        insert_query = f"""INSERT INTO {config.DB_TABLE_NAME} 
+        insert_query = pg_sql.SQL("""INSERT INTO {}
                          (request_id, session_id, user_id, question, rephrased_question, answer, retrieved_contexts, latency_ms, prompt_tokens, completion_tokens, total_tokens)
-                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id;"""
-        
+                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id;""").format(
+            pg_sql.Identifier(config.DB_TABLE_NAME)
+        )
+
         with get_db_cursor(commit=True) as (conn, cursor):
             cursor.execute(insert_query, (
                 request_id, session_id, user_id,

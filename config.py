@@ -48,7 +48,7 @@ LINE_USER_ID = os.getenv("LINE_USER_ID")
 
 # --- CORS ---
 # 從環境變數讀取允許的來源，預設為本地開發常用的來源
-CORS_ALLOWED_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000,https://tcu-scholarships-chatbot.onrender.com/")
+CORS_ALLOWED_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000,https://tcu-scholarships-chatbot.onrender.com")
 # 將字串轉換為列表
 ALLOWED_ORIGINS_LIST = [origin.strip() for origin in CORS_ALLOWED_ORIGINS.split(',')]
 

@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional
 import psycopg2
+from psycopg2 import sql as pg_sql
 import traceback
 import json
 import time
@@ -206,10 +207,9 @@ async def feedback_endpoint(request: Request, feedback_request: FeedbackRequest)
         try:
             cursor = conn.cursor()
             
-            TABLE_NAME = config.DB_TABLE_NAME
-            update_query = f"""UPDATE {TABLE_NAME}
+            update_query = pg_sql.SQL("""UPDATE {}
                              SET feedback_type = %s, feedback_text = %s
-                             WHERE id = %s;"""
+                             WHERE id = %s;""").format(pg_sql.Identifier(config.DB_TABLE_NAME))
 
             cursor.execute(update_query, (feedback_type, feedback_text, log_id))
             conn.commit()
