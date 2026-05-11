@@ -1,6 +1,7 @@
-// Type declarations for marked.js which is loaded via CDN
+// Type declarations for libraries loaded via CDN
 declare const marked: any;
 declare const Choices: any;
+declare const DOMPurify: any;
 
 interface Scholarship {
     scholarship_code: string;
@@ -76,7 +77,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Live preview for markdown
     markdownInput.addEventListener('input', () => {
         if (typeof marked !== 'undefined') {
-            markdownPreview.innerHTML = marked.parse(markdownInput.value);
+            markdownPreview.innerHTML = DOMPurify.sanitize(marked.parse(markdownInput.value));
         }
     });
 

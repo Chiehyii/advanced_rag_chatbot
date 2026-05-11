@@ -46,12 +46,13 @@ async def lifespan(app: FastAPI):
     yield
     await close_postgres_checkpointer()
 
+_is_production = config.ENVIRONMENT == "production"
 app = FastAPI(
     title="Chatbot RAG API",
     description="An API for the Milvus RAG chatbot.",
     version="1.0.0",
-    docs_url=None if getattr(config, 'ENVIRONMENT', 'production') == 'production' else '/docs',
-    redoc_url=None if getattr(config, 'ENVIRONMENT', 'production') == 'production' else '/redoc',
+    docs_url=None if _is_production else '/docs',
+    redoc_url=None if _is_production else '/redoc',
     lifespan=lifespan,
 )
 app.state.limiter = limiter
@@ -66,14 +67,25 @@ app.add_middleware(
     allow_headers=["Content-Type", "Authorization", "Accept", "X-Request-ID"],
 )
 
+_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; "
+    "img-src 'self' data: https://www.google.com; "
+    "font-src 'self' https://fonts.gstatic.com; "
+    "connect-src 'self'; "
+    "frame-ancestors 'none'; "
+    "base-uri 'self';"
+)
+
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
-    """為所有請求加入 Security Headers"""
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Content-Security-Policy"] = _CSP
     if request.url.scheme == "https":
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response

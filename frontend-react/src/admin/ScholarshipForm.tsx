@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import Select from 'react-select';
 import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 import { Scholarship, AdminMode, MetadataSchema } from './types';
 import { apiSaveScholarship, apiUpdateScholarship, apiDeleteScholarship, apiDiscardPending, apiGetMetadataSchema } from './api';
 import './admin.css';
@@ -81,7 +82,7 @@ export function ScholarshipForm({ initialData, mode, onSaved, onDeleted, onUnaut
 
     useEffect(() => {
         if (previewRef.current) {
-            previewRef.current.innerHTML = marked.parse(markdown) as string;
+            previewRef.current.innerHTML = DOMPurify.sanitize(marked.parse(markdown) as string);
         }
     }, [markdown]);
 

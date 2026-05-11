@@ -46,11 +46,13 @@ RATE_LIMIT_FEEDBACK = os.getenv("RATE_LIMIT_FEEDBACK", "20/minute")
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_USER_ID = os.getenv("LINE_USER_ID")
 
+# --- Environment ---
+ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
+
 # --- CORS ---
-# 從環境變數讀取允許的來源，預設為本地開發常用的來源
 CORS_ALLOWED_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000,https://tcu-scholarships-chatbot.onrender.com")
-# 將字串轉換為列表
-ALLOWED_ORIGINS_LIST = [origin.strip() for origin in CORS_ALLOWED_ORIGINS.split(',')]
+# Strip trailing slashes — mismatched origins (e.g. "https://example.com/") silently break CORS
+ALLOWED_ORIGINS_LIST = [origin.strip().rstrip('/') for origin in CORS_ALLOWED_ORIGINS.split(',') if origin.strip()]
 
 # 簡單檢查以確保關鍵環境變數已設定
 if not OPENAI_API_KEY or not ZILLIZ_API_KEY or not CLUSTER_ENDPOINT:
