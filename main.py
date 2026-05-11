@@ -21,11 +21,21 @@ import admin_api
 from scheduler import start_scheduler
 from logger import get_logger, request_id_var
 from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-# 建立速率限制器（以 IP 為識別）
-limiter = Limiter(key_func=get_remote_address)
+def _get_real_ip(request: Request) -> str:
+    """
+    Read the real client IP safely when behind a reverse proxy.
+    Render/Nginx append the real IP as the LAST entry in X-Forwarded-For,
+    so we take the last entry instead of the first (which is client-controlled).
+    Falls back to the direct TCP connection host if the header is absent.
+    """
+    forwarded_for = request.headers.get("X-Forwarded-For", "")
+    if forwarded_for:
+        return forwarded_for.split(",")[-1].strip()
+    return request.client.host if request.client else "127.0.0.1"
+
+limiter = Limiter(key_func=_get_real_ip)
 
 # 簡單記憶體快取，用於 filter_scholarships (10分鐘 TTL)
 _scholarship_cache = {"data": None, "timestamp": 0}
@@ -79,6 +89,14 @@ _CSP = (
 )
 
 @app.middleware("http")
+async def limit_request_body_size(request: Request, call_next):
+    max_bytes = 1 * 1024 * 1024  # 1 MB
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > max_bytes:
+        return JSONResponse(status_code=413, content={"detail": "Request body too large"})
+    return await call_next(request)
+
+@app.middleware("http")
 async def add_security_headers(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -102,26 +120,24 @@ async def request_id_middleware(request: Request, call_next):
 
 # --- Pydantic Models for Request and Response ---
 
+class HistoryMessage(BaseModel):
+    role: str = Field(..., pattern='^(user|assistant)$')
+    content: str = Field(..., min_length=1, max_length=2000)
+
 class ChatRequest(BaseModel):
     """[OPT-3] Request model for a user's chat query — with length limits to prevent token abuse."""
-    query: str = Field(..., min_length=1, max_length=1000,
-                       description="The user's question. Max 1000 characters.")
-    history: List[dict] | None = Field(None, max_length=20,
-                                       description="Chat history. Max 20 messages.")
-    lang: Optional[str] = Field('zh', pattern='^(zh|en)$',
-                                description="Language code: 'zh' or 'en' only.")
-    title_filter: List[str] | None = Field(None, max_length=3,
-                                           description="Optional list of scholarship titles to narrow RAG search. Max 3.")
-    session_id: Optional[str] = Field(None, max_length=36,
-                                      description="Browser session ID for conversation tracking.")
-    user_id: Optional[str] = Field(None, max_length=36,
-                                   description="Anonymous browser user ID for user tracking.")
+    query: str = Field(..., min_length=1, max_length=1000)
+    history: List[HistoryMessage] | None = Field(None, max_length=20)
+    lang: Optional[str] = Field('zh', pattern='^(zh|en)$')
+    title_filter: List[str] | None = Field(None, max_length=3)
+    session_id: Optional[str] = Field(None, max_length=36)
+    user_id: Optional[str] = Field(None, max_length=36)
 
 class FeedbackRequest(BaseModel):
     """Request model for submitting feedback."""
-    log_id: int
-    feedback_type: Optional[str] = None  # "like", "dislike", or null
-    feedback_text: Optional[str] = None
+    log_id: int = Field(..., ge=1)
+    feedback_type: Optional[str] = Field(None, pattern='^(like|dislike)$')
+    feedback_text: Optional[str] = Field(None, max_length=500)
 
 # --- API Endpoints ---
 
@@ -167,7 +183,8 @@ async def chat_endpoint(request: Request, chat_request: ChatRequest):
             # ---------------------------------------------------------------------------------
 
             # The pipeline now yields events (content chunks or final data)
-            async for event in stream_agent_pipeline(chat_request.query, chat_request.history or [], chat_request.lang, title_filter=chat_request.title_filter, request_id=rid, session_id=sid, user_id=uid):
+            history_dicts = [msg.model_dump() for msg in chat_request.history] if chat_request.history else []
+            async for event in stream_agent_pipeline(chat_request.query, history_dicts, chat_request.lang, title_filter=chat_request.title_filter, request_id=rid, session_id=sid, user_id=uid):
                 event_type = event.get("type")
                 data = event.get("data")
 

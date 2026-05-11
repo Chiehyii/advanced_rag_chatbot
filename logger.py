@@ -12,9 +12,16 @@ from logging.handlers import TimedRotatingFileHandler
 request_id_var: ContextVar[str] = ContextVar('request_id', default='-')
 
 class RequestIdFilter(logging.Filter):
-    """自動將 contextvars 中的 request_id 注入每一條 log record"""
+    """自動將 contextvars 中的 request_id 注入每一條 log record，並消毒換行符以防 log injection"""
+    _CTRL_CHARS = str.maketrans({
+        '\n': '\\n', '\r': '\\r', '\t': '\\t',
+        '\x00': '', '\x1b': '',  # null byte, ESC
+    })
+
     def filter(self, record):
         record.request_id = request_id_var.get('-')
+        if isinstance(record.msg, str):
+            record.msg = record.msg.translate(self._CTRL_CHARS)
         return True
 
 def get_logger(name: str):

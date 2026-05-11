@@ -7,7 +7,6 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from slowapi import Limiter
-from slowapi.util import get_remote_address
 from pydantic import BaseModel
 from openai import OpenAI
 import config
@@ -27,8 +26,14 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/api", tags=["admin"])
 openai_client = OpenAI(api_key=config.OPENAI_API_KEY)
 
+def _get_real_ip(request: Request) -> str:
+    forwarded_for = request.headers.get("X-Forwarded-For", "")
+    if forwarded_for:
+        return forwarded_for.split(",")[-1].strip()
+    return request.client.host if request.client else "127.0.0.1"
+
 # [SEC-4] 管理後台專屬的速率限制器
-limiter = Limiter(key_func=get_remote_address)
+limiter = Limiter(key_func=_get_real_ip)
 
 # --- Models ---
 class ExtractRequest(BaseModel):
