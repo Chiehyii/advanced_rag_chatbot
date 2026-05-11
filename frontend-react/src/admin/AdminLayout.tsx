@@ -5,6 +5,7 @@ import { ScholarshipForm } from './ScholarshipForm';
 import { Dashboard } from './Dashboard';
 import { Scholarship, AdminMode } from './types';
 import { BarChart3, FolderOpen } from 'lucide-react';
+import { apiLogout } from './api';
 import './admin.css';
 
 interface AdminLayoutProps {
@@ -37,6 +38,13 @@ export function AdminLayout({ onLogout }: AdminLayoutProps) {
         onLogout();
         showToast('驗證過期，請重新登入', 'error');
     }, [onLogout]);
+
+    const handleLogoutClick = async () => {
+        await apiLogout();
+        sessionStorage.removeItem('admin_jwt');
+        sessionStorage.removeItem('admin_refresh_jwt');
+        onLogout();
+    };
 
     // 點擊側欄某筆獎學金 → 進入 detail 頁
     const handleSelectScholarship = (s: Scholarship) => {
@@ -111,7 +119,7 @@ export function AdminLayout({ onLogout }: AdminLayoutProps) {
                         系統已連線
                     </div>
                     <button
-                        onClick={() => { sessionStorage.removeItem('admin_jwt'); sessionStorage.removeItem('admin_refresh_jwt'); onLogout(); }}
+                        onClick={handleLogoutClick}
                         style={{
                             background: 'none', border: '1px solid #cbd5e1', borderRadius: 8,
                             padding: '6px 14px', cursor: 'pointer', fontSize: '0.85rem', color: '#64748b',

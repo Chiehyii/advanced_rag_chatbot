@@ -56,6 +56,17 @@ export async function apiLogin(username: string, password: string): Promise<stri
     }
     return data.access_token;
 }
+
+export async function apiLogout(): Promise<void> {
+    const refreshToken = sessionStorage.getItem('admin_refresh_jwt');
+    if (!refreshToken) return;
+    await authFetch('/api/logout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+    }).catch(() => undefined);
+}
+
 export async function apiListScholarships(): Promise<Scholarship[]> {
     const res = await authFetch('/api/scholarships');
     if (res.status === 401) throw new Error('UNAUTHORIZED');

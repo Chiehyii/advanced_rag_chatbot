@@ -29,7 +29,7 @@ _auth_tables_ready = False
 
 def _get_real_ip(request: Request) -> str:
     forwarded_for = request.headers.get("X-Forwarded-For", "")
-    if forwarded_for:
+    if config.TRUST_PROXY_HEADERS and forwarded_for:
         return forwarded_for.split(",")[-1].strip()
     return request.client.host if request.client else "127.0.0.1"
 
@@ -384,6 +384,28 @@ async def refresh_token(request: Request, refresh_request: RefreshTokenRequest):
         return {"access_token": access_token, "refresh_token": new_refresh_token, "token_type": "bearer"}
     except jwt.InvalidTokenError:
         raise credentials_exception
+
+@router.post("/logout")
+async def logout(request: RefreshTokenRequest, current_admin: str = Depends(verify_admin)):
+    try:
+        payload = jwt.decode(request.refresh_token, config.JWT_SECRET_KEY, algorithms=[config.ALGORITHM])
+        jti = payload.get("jti")
+        token_type = payload.get("type")
+        username = payload.get("sub")
+        if jti and token_type == "refresh" and username == current_admin:
+            _ensure_auth_tables()
+            with get_db_cursor(commit=True) as (conn, cursor):
+                cursor.execute(
+                    """
+                    UPDATE admin_refresh_tokens
+                    SET revoked_at = CURRENT_TIMESTAMP
+                    WHERE jti = %s AND subject = %s AND revoked_at IS NULL;
+                    """,
+                    (jti, current_admin),
+                )
+    except jwt.InvalidTokenError:
+        pass
+    return {"status": "success"}
 
 def _parse_json_array(value):
     """Safely parse a JSON string into a list. Returns [] on failure."""

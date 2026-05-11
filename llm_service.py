@@ -53,7 +53,7 @@ async def _translate_to_zh(text: str) -> str:
         max_completion_tokens=500,
     )
     translated = response.choices[0].message.content.strip()
-    logger.info(f"[Translate] '{text}' → '{translated}'")
+    logger.info(f"[Translate] Completed translation (input_len={len(text)}, output_len={len(translated)})")
     return translated
 
 def _rephrase_fallback(retry_state):
@@ -92,7 +92,7 @@ async def _rephrase_question_with_history(history: list, question: str, lang: st
     if not rephrased_question:
         return question
     # 📝 INFO：記錄問題重構成功
-    logger.info(f"[Rephrase] Successfully rephrased question: {rephrased_question}")
+    logger.info(f"[Rephrase] Successfully rephrased question (length={len(rephrased_question)})")
     return rephrased_question
 
 class SuggestedReplies(BaseModel):

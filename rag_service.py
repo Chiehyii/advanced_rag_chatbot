@@ -214,7 +214,7 @@ async def _preprocess_query(rephrased_question: str, lang: str, title_filter: li
         title_str = "、".join(title_filter[:3]) if lang == 'zh' else ", ".join(title_filter[:3])
         prefix = f"關於「{title_str}」：" if lang == 'zh' else f"Regarding '{title_str}': "
         rephrased_question = prefix + rephrased_question
-        logger.info(f"[Title Filter] Injected tags into question: {rephrased_question}")
+        logger.info(f"[Title Filter] Injected selected titles into retrieval query (length={len(rephrased_question)})")
 
         question_for_retrieval, embedding = await asyncio.gather(
             _maybe_translate(rephrased_question),
@@ -285,7 +285,7 @@ async def stream_chat_pipeline(question: str, history: list | None = None, lang:
         else:
             logger.info("[Rephrase] Skipped rephrasing because this is the first user query.")
 
-        logger.info(f"[Question] Final question: {rephrased_question} (Original: {original_question})")
+        logger.info(f"[Question] Prepared retrieval question (original_len={len(original_question)}, final_len={len(rephrased_question)})")
 
         # 1. 前處理 (Preprocess)
         intent, expr, rephrased_question, question_for_retrieval, embedding = await _preprocess_query(

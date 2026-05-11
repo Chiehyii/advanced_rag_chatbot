@@ -32,7 +32,7 @@ def _get_real_ip(request: Request) -> str:
     Falls back to the direct TCP connection host if the header is absent.
     """
     forwarded_for = request.headers.get("X-Forwarded-For", "")
-    if forwarded_for:
+    if config.TRUST_PROXY_HEADERS and forwarded_for:
         return forwarded_for.split(",")[-1].strip()
     return request.client.host if request.client else "127.0.0.1"
 
@@ -91,11 +91,23 @@ _CSP = (
 
 @app.middleware("http")
 async def limit_request_body_size(request: Request, call_next):
-    max_bytes = 1 * 1024 * 1024  # 1 MB
-    content_length = request.headers.get("content-length")
-    if content_length and int(content_length) > max_bytes:
-        return JSONResponse(status_code=413, content={"detail": "Request body too large"})
-    return await call_next(request)
+    max_bytes = config.MAX_REQUEST_BODY_BYTES
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > max_bytes:
+            return JSONResponse(status_code=413, content={"detail": "Request body too large"})
+
+    sent = False
+
+    async def receive():
+        nonlocal sent
+        if sent:
+            return {"type": "http.request", "body": b"", "more_body": False}
+        sent = True
+        return {"type": "http.request", "body": bytes(body), "more_body": False}
+
+    return await call_next(Request(request.scope, receive))
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
@@ -172,7 +184,7 @@ async def chat_endpoint(request: Request, chat_request: ChatRequest):
         try:
             
             # 📝 INFO：記錄使用者的提問與語言
-            logger.info(f"[Chat] Processing query for stream: '{chat_request.query}' in language '{chat_request.lang}'")
+            logger.info(f"[Chat] Processing query stream (length={len(chat_request.query)}, lang={chat_request.lang})")
             
             # --- 壓力測試防護：如果是 MOCK_TEST，直接回傳模擬資料，不進 OpenAI Pipeline ---
             if getattr(config, 'ENVIRONMENT', 'production') != 'production' and chat_request.query == "MOCK_TEST":

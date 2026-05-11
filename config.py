@@ -48,6 +48,8 @@ LINE_USER_ID = os.getenv("LINE_USER_ID")
 
 # --- Environment ---
 ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
+TRUST_PROXY_HEADERS = os.getenv("TRUST_PROXY_HEADERS", "false").lower() == "true"
+MAX_REQUEST_BODY_BYTES = int(os.getenv("MAX_REQUEST_BODY_BYTES", str(1 * 1024 * 1024)))
 
 # --- CORS ---
 CORS_ALLOWED_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000,https://tcu-scholarships-chatbot.onrender.com")

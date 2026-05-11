@@ -156,7 +156,7 @@ async def analyze_and_extract_node(state: AgentState) -> dict:
         if extracted.specific_name:
             new_profile["specific_name"] = extracted.specific_name
 
-        logger.info(f"[Analyze] Profile: {new_profile}")
+        logger.info(f"[Analyze] Profile extracted with fields: {sorted(new_profile.keys())}")
         return {
             "current_intent": "scholarship",
             "user_profile": new_profile,
@@ -302,7 +302,7 @@ async def retrieve_node(state: AgentState) -> dict:
     else:
         search_question = last_human
 
-    logger.info(f"[Retrieve] Search question: {search_question}")
+    logger.info(f"[Retrieve] Search question prepared (length={len(search_question)})")
 
     expr = build_milvus_expr_from_profile(profile, title_filter)
 
@@ -452,5 +452,5 @@ async def small_talk_node(state: AgentState) -> dict:
         max_completion_tokens=500,
     )
     answer = response.choices[0].message.content.strip()
-    logger.info(f"[SmallTalk] Answer: {answer[:80]}...")
+    logger.info(f"[SmallTalk] Answer generated (length={len(answer)})")
     return {"messages": [AIMessage(content=answer)], "retrieved_docs": [], "_usage": response.usage}
