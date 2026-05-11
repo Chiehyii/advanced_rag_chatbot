@@ -3,7 +3,7 @@ import { AdminLogin } from './AdminLogin';
 import { AdminLayout } from './AdminLayout';
 import './admin.css';
 export function AdminApp() {
-    const [token, setToken] = useState<string>(() => localStorage.getItem('admin_jwt') || '');
+    const [token, setToken] = useState<string>(() => sessionStorage.getItem('admin_jwt') || '');
     useEffect(() => {
         document.title = '獎學金知識庫管理中心';
     }, []);

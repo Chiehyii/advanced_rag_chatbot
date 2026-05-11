@@ -1,6 +1,6 @@
 import { Scholarship } from './types';
 const API_BASE_URL = import.meta.env.VITE_API_URL || '';
-const getToken = (): string => localStorage.getItem('admin_jwt') || '';
+const getToken = (): string => sessionStorage.getItem('admin_jwt') || '';
 export async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
     const headers = new Headers(options.headers);
     headers.set('Authorization', `Bearer ${getToken()}`);
@@ -9,7 +9,7 @@ export async function authFetch(url: string, options: RequestInit = {}): Promise
     let res = await fetch(fullUrl, { ...options, headers });
     
     if (res.status === 401) {
-        const refreshToken = localStorage.getItem('admin_refresh_jwt');
+        const refreshToken = sessionStorage.getItem('admin_refresh_jwt');
         if (refreshToken) {
             try {
                 const refreshRes = await fetch(`${API_BASE_URL}/api/refresh`, {
@@ -20,14 +20,14 @@ export async function authFetch(url: string, options: RequestInit = {}): Promise
                 
                 if (refreshRes.ok) {
                     const data = await refreshRes.json();
-                    localStorage.setItem('admin_jwt', data.access_token);
+                    sessionStorage.setItem('admin_jwt', data.access_token);
                     // Retry original request with new token
                     headers.set('Authorization', `Bearer ${data.access_token}`);
                     res = await fetch(fullUrl, { ...options, headers });
                 } else {
                     // Refresh failed, clear tokens
-                    localStorage.removeItem('admin_jwt');
-                    localStorage.removeItem('admin_refresh_jwt');
+                    sessionStorage.removeItem('admin_jwt');
+                    sessionStorage.removeItem('admin_refresh_jwt');
                 }
             } catch (err) {
                 console.error("Refresh token failed", err);
@@ -49,7 +49,7 @@ export async function apiLogin(username: string, password: string): Promise<stri
     if (!res.ok) throw new Error('登入失敗');
     const data = await res.json();
     if (data.refresh_token) {
-        localStorage.setItem('admin_refresh_jwt', data.refresh_token);
+        sessionStorage.setItem('admin_refresh_jwt', data.refresh_token);
     }
     return data.access_token;
 }

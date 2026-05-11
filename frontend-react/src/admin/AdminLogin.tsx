@@ -15,7 +15,7 @@ export function AdminLogin({ onLoginSuccess }: AdminLoginProps) {
         setError('');
         try {
             const token = await apiLogin(username, password);
-            localStorage.setItem('admin_jwt', token);
+            sessionStorage.setItem('admin_jwt', token);
             onLoginSuccess(token);
         } catch {
             setError('帳號或密碼錯誤');
