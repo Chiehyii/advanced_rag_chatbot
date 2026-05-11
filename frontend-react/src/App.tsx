@@ -180,7 +180,7 @@ function App() {
     }
   }, [theme]);
   // --- 追蹤 ID ---
-  const sessionId = useRef(getOrCreateId(sessionStorage, SESSION_ID_KEY)).current;
+  const sessionIdRef = useRef(getOrCreateId(sessionStorage, SESSION_ID_KEY));
   const userId = useRef(getOrCreateId(localStorage, USER_ID_KEY)).current;
   // [PERF-4] RAF handle 用於批次更新串流內容，避免每個 token 就觸發一次 re-render
   const rafRef = useRef<number | null>(null);
@@ -235,7 +235,7 @@ function App() {
           history,
           lang: language,
           title_filter: selectedTags.length > 0 ? selectedTags.map(t => t.title) : null,
-          session_id: sessionId,
+          session_id: sessionIdRef.current,
           user_id: userId,
         })
       });
@@ -364,9 +364,12 @@ function App() {
   };
   const handleClearChat = () => {
     setMessages([]);
-    setSelectedTags([]);  // Clear tags when clearing chat
+    setSelectedTags([]);
     try {
       sessionStorage.removeItem(CHAT_STORAGE_KEY);
+      const newSessionId = crypto.randomUUID();
+      sessionStorage.setItem(SESSION_ID_KEY, newSessionId);
+      sessionIdRef.current = newSessionId;
     } catch (e) {
       console.warn('Failed to clear chat history from sessionStorage:', e);
     }
