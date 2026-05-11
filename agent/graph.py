@@ -35,8 +35,11 @@ from agent.nodes import (
     small_talk_node,
 )
 from logger import get_logger
+import config
 
 logger = get_logger(__name__)
+
+_pg_pool = None  # 持有 pool 的 reference，供 shutdown 關閉
 
 
 # ─────────────────────────────────────────
@@ -96,6 +99,55 @@ def build_graph(checkpointer=None):
 
 # ─────────────────────────────────────────
 # Module-level singleton
+# 預設使用 MemorySaver，lifespan 啟動後由 init_postgres_checkpointer() 換成 PostgreSQL
 # ─────────────────────────────────────────
-memory = MemorySaver()
-graph = build_graph(checkpointer=memory)
+graph = build_graph(checkpointer=MemorySaver())
+
+
+async def init_postgres_checkpointer() -> bool:
+    """
+    在 FastAPI lifespan 啟動時呼叫。
+    用 PostgreSQL checkpointer 重建 graph，讓 user_profile 跨 worker、跨重啟持久化。
+    DB 設定不完整或連線失敗時自動 fallback 到 MemorySaver。
+    """
+    global graph, _pg_pool
+
+    if not all([config.DB_HOST, config.DB_NAME, config.DB_USER, config.DB_PASSWORD]):
+        logger.warning("[Graph] DB 設定不完整，使用 MemorySaver。")
+        return False
+
+    try:
+        from psycopg_pool import AsyncConnectionPool
+        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+        conn_string = (
+            f"postgresql://{config.DB_USER}:{config.DB_PASSWORD}"
+            f"@{config.DB_HOST}:{config.DB_PORT}/{config.DB_NAME}"
+        )
+        pool = AsyncConnectionPool(
+            conninfo=conn_string,
+            max_size=5,
+            open=False,
+            kwargs={"autocommit": True},
+        )
+        await pool.open()
+        _pg_pool = pool
+
+        checkpointer = AsyncPostgresSaver(pool)
+        await checkpointer.setup()  # 自動建立 checkpoint tables（冪等）
+
+        graph = build_graph(checkpointer=checkpointer)
+        logger.info("[Graph] PostgreSQL checkpointer 初始化成功，graph 已重建。")
+        return True
+
+    except Exception as e:
+        logger.error(f"[Graph] PostgreSQL checkpointer 失敗，fallback 到 MemorySaver: {e}", exc_info=True)
+        return False
+
+
+async def close_postgres_checkpointer():
+    """在 FastAPI lifespan 結束時呼叫，關閉 PostgreSQL 連線池。"""
+    global _pg_pool
+    if _pg_pool:
+        await _pg_pool.close()
+        logger.info("[Graph] PostgreSQL pool 已關閉。")

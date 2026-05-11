@@ -8,6 +8,7 @@ uvicorn==0.40.0
 # --- OpenAI + LangChain ---
 openai==2.9.0
 langgraph>=0.4.1
+langgraph-checkpoint-postgres>=2.0.0
 langchain-openai>=0.3.0
 # langchain
 # langchain-community
@@ -16,6 +17,7 @@ langchain-text-splitters==1.1.0
 # --- Vector DBs ---
 pymilvus==2.6.5
 psycopg2-binary==2.9.11     # PGVector 用
+psycopg[binary,pool]>=3.1.0 # LangGraph PostgreSQL checkpointer 用
 
 # --- Embeddings / NLP / Transformers ---
 # transformers
