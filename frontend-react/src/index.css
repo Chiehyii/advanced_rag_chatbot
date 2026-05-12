@@ -862,6 +862,11 @@ body {
   font-weight: 600;
 }
 
+.markdown-table-wrapper {
+  width: 100%;
+  overflow: visible;
+}
+
 .bot-message table {
   width: 100%;
   border-collapse: collapse;
@@ -878,7 +883,21 @@ body {
 .bot-message td {
   padding: 10px 12px;
   text-align: left;
+  vertical-align: top;
+  line-height: 1.45;
+  word-break: normal;
+  overflow-wrap: normal;
   border-bottom: 1px solid var(--border-color);
+}
+
+.bot-message th:first-child,
+.bot-message td:first-child {
+  width: 28%;
+}
+
+.bot-message th:not(:first-child),
+.bot-message td:not(:first-child) {
+  width: 18%;
 }
 
 .bot-message th {
@@ -1291,19 +1310,6 @@ body {
   .bot-left-col {
     max-width: 100%;
     /* Take full width on mobile */
-  }
-
-  /* Make table horizontally scrollable on mobile without squishing columns */
-  .bot-message table {
-    display: block;
-    overflow-x: auto;
-    overflow-y: hidden;
-    -webkit-overflow-scrolling: touch;
-  }
-
-  .bot-message th,
-  .bot-message td {
-    min-width: 85px;
   }
 
   .contexts {
@@ -1840,6 +1846,26 @@ a.inline-citation:hover sup {
 
 /* ======== RWD for Filter Modal ======== */
 @media (max-width: 768px) {
+  .markdown-table-wrapper {
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .bot-message table {
+    min-width: 760px;
+  }
+
+  .bot-message th:first-child,
+  .bot-message td:first-child {
+    min-width: 220px;
+  }
+
+  .bot-message th:not(:first-child),
+  .bot-message td:not(:first-child) {
+    min-width: 130px;
+  }
+
   .filter-modal {
     width: 95%;
     max-height: 85vh;

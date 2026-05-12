@@ -60,8 +60,10 @@ PROMPTS = {
 【排版與回答規則】（僅在旗標為 True 時適用）
 1. **只推薦真正符合使用者條件的獎助學金**，不符合的直接跳過，不要提及。
 2. 從檢索內容中挑選**最多 3 個**最適合的方案進行推薦。
-3. 如果有 2 個以上，先使用 Markdown 表格進行比較，再分別詳述。
-4. 如果沒有相關資訊，請禮貌告知。
+3. 如果有 2 個以上，先使用 Markdown 表格進行比較。表格欄位請涵蓋名稱、申請資格、補助金額/內容、申請時間/期限、主要應備文件。
+4. 表格已呈現的資訊不要在表格下方逐項重複說明。表格後只補充「推薦順序與原因」：用 2-3 個短項目說明最推薦哪一項、為什麼適合使用者、以及必要的注意事項。
+5. 如果只有 1 個方案，直接說明該方案重點與推薦原因，不需要表格。
+6. 如果沒有相關資訊，請禮貌告知。
 
 """,
         'rag_user': """使用者問題：
@@ -219,8 +221,10 @@ The system provides a flag: {profile_sufficient}
 [Layout Rules] (Only when flag is True)
 1. **Only recommend scholarships that genuinely match the user's conditions.** Skip and do not mention any that do not match.
 2. Select **at most 3** best-matching scholarships.
-3. If there are 2 or more, present a Markdown comparison table first, then detail each.
-4. If no relevant info found, politely inform the user.
+3. If there are 2 or more, present a Markdown comparison table first. Include columns for name, eligibility, amount/support, application time/deadline, and required documents.
+4. Do not repeat row-by-row details below the table. After the table, add only a "Recommended options and reasons" section with 2-3 concise bullets explaining the top choice, why it fits the user, and any necessary cautions.
+5. If there is only 1 option, explain its key points and why it is recommended without using a table.
+6. If no relevant info found, politely inform the user.
 
 """,
         'rag_user': """User Question:

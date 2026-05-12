@@ -34,7 +34,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
     }
   };
 
-  const renderCitation = (num: string, key: string, ctxs: ContextLike[]) => {
+  const renderCitation = (num: string, key: string, ctxs: ContextLike[], showTooltip = true) => {
     const idx = parseInt(num, 10) - 1;
     const ctx = ctxs && ctxs[idx] ? ctxs[idx] : null;
     if (!ctx) return <sup key={key} className="inline-citation">[{num}]</sup>;
@@ -42,6 +42,14 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
     const url = sanitizeUrl(ctx.source_url);
     const title = ctx.source_file || t.unknown_source;
     const domain = url !== '#' ? new URL(url).hostname : '';
+
+    if (!showTooltip) {
+      return (
+        <a key={key} href={url} target="_blank" rel="noopener noreferrer" className="inline-citation">
+          <sup>[{num}]</sup>
+        </a>
+      );
+    }
 
     return (
       <span key={key} className="citation-wrapper">
@@ -56,7 +64,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
     );
   };
 
-  const renderInline = (text: string, keyPrefix: string, ctxs: ContextLike[]): React.ReactNode[] => {
+  const renderInline = (text: string, keyPrefix: string, ctxs: ContextLike[], options: { showCitationTooltip?: boolean } = {}): React.ReactNode[] => {
     const nodes: React.ReactNode[] = [];
     const pattern = /(\[(\d+)\]|\[([^\]]+)\]\(([^)]+)\)|`([^`]+)`|\*\*([^*]+)\*\*)/g;
     let lastIndex = 0;
@@ -69,7 +77,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
 
       const key = `${keyPrefix}-${match.index}`;
       if (match[2]) {
-        nodes.push(renderCitation(match[2], key, ctxs));
+        nodes.push(renderCitation(match[2], key, ctxs, options.showCitationTooltip !== false));
       } else if (match[3] && match[4]) {
         const url = sanitizeUrl(match[4]);
         nodes.push(
@@ -93,8 +101,80 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
     return nodes;
   };
 
+  const normalizeMarkdownTables = (value: string): string => {
+    const separatorPattern = /\|(?:\s*:?-{3,}:?\s*\|)+/g;
+    const countCells = (row: string) => row.split('|').slice(1, -1).length;
+    const readRow = (line: string, start: number, cellCount: number) => {
+      let pipes = 0;
+      for (let i = start; i < line.length; i++) {
+        if (line[i] === '|') {
+          pipes += 1;
+          if (pipes === cellCount + 1) {
+            return { row: line.slice(start, i + 1).trim(), end: i + 1 };
+          }
+        }
+      }
+      return null;
+    };
+
+    return value.split('\n').map((line) => {
+      separatorPattern.lastIndex = 0;
+      const separatorMatch = separatorPattern.exec(line);
+      if (!separatorMatch) return line;
+
+      const separator = separatorMatch[0].trim();
+      const cellCount = countCells(separator);
+      if (cellCount < 2) return line;
+
+      const separatorStart = separatorMatch.index;
+      const headerCandidates: number[] = [];
+      for (let i = 0; i < separatorStart; i++) {
+        if (line[i] === '|') headerCandidates.push(i);
+      }
+
+      let headerStart: number | undefined;
+      for (let i = headerCandidates.length - 1; i >= 0; i--) {
+        const start = headerCandidates[i];
+        const candidate = readRow(line, start, cellCount);
+        if (candidate && candidate.end <= separatorStart && line.slice(candidate.end, separatorStart).trim() === '') {
+          headerStart = start;
+          break;
+        }
+      }
+      if (headerStart === undefined) return line;
+
+      const header = readRow(line, headerStart, cellCount);
+      const separatorRow = readRow(line, separatorStart, cellCount);
+      if (!header || !separatorRow) return line;
+
+      const rows: string[] = [];
+      let cursor = separatorRow.end;
+      while (cursor < line.length) {
+        while (line[cursor] === ' ' || line[cursor] === '\t') cursor += 1;
+        if (line[cursor] !== '|') break;
+
+        const row = readRow(line, cursor, cellCount);
+        if (!row) break;
+        rows.push(row.row);
+        cursor = row.end;
+      }
+
+      if (rows.length === 0) return line;
+
+      const before = line.slice(0, headerStart);
+      const after = line.slice(cursor);
+      const trailingText = after.trim() ? `\n\n${after.trimStart()}` : after;
+      return `${before}${header.row}\n${separator}\n${rows.join('\n')}${trailingText}`;
+    }).join('\n');
+  };
+
+  const getTableCellText = (cell: any): string => {
+    if (typeof cell === 'string') return cell;
+    return cell?.text || cell?.raw || '';
+  };
+
   const renderMarkdown = (text: string, ctxs: ContextLike[]) => {
-    const tokens = marked.lexer(text, { gfm: true, breaks: true }) as any[];
+    const tokens = marked.lexer(normalizeMarkdownTables(text), { gfm: true, breaks: true }) as any[];
 
     return tokens.map((token, idx) => {
       const key = `md-${idx}`;
@@ -116,6 +196,35 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
               <li key={`${key}-item-${itemIdx}`}>{renderInline(item.text || '', `${key}-item-${itemIdx}`, ctxs)}</li>
             ))}
           </ListTag>
+        );
+      }
+
+      if (token.type === 'table') {
+        return (
+          <div key={key} className="markdown-table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  {(token.header || []).map((cell: any, cellIdx: number) => (
+                    <th key={`${key}-head-${cellIdx}`} style={{ textAlign: token.align?.[cellIdx] || undefined }}>
+                      {renderInline(getTableCellText(cell), `${key}-head-${cellIdx}`, ctxs, { showCitationTooltip: false })}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {(token.rows || []).map((row: any[], rowIdx: number) => (
+                  <tr key={`${key}-row-${rowIdx}`}>
+                    {row.map((cell: any, cellIdx: number) => (
+                      <td key={`${key}-cell-${rowIdx}-${cellIdx}`} style={{ textAlign: token.align?.[cellIdx] || undefined }}>
+                        {renderInline(getTableCellText(cell), `${key}-cell-${rowIdx}-${cellIdx}`, ctxs, { showCitationTooltip: false })}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         );
       }
 
