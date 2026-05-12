@@ -15,6 +15,8 @@ const CHAT_STORAGE_KEY = 'tcu_scholarship_chat_history';
 const SESSION_ID_KEY = 'tcu_session_id';
 const USER_ID_KEY = 'tcu_user_id';
 const API_BASE_URL = import.meta.env.VITE_API_URL || '';
+const MAX_HISTORY_MESSAGES = 20;
+const MAX_HISTORY_CONTENT_LENGTH = 2000;
 
 /** 從指定的 Storage 中取得或產生一個新的 UUID */
 function getOrCreateId(storage: Storage, key: string): string {
@@ -204,6 +206,11 @@ function App() {
     }
   }, [messages]);
   const handleSendMessage = async (text: string) => {
+    const query = text.trim();
+    if (!query || isLoading) {
+      return;
+    }
+
     // Hide prediction chips from the last bot message before responding
     setMessages(prev => {
       const updatedMessages = [...prev];
@@ -216,12 +223,21 @@ function App() {
       return updatedMessages;
     });
     // Add user message
-    const newMessage = { role: 'user', content: text } as Message;
+    const newMessage = { role: 'user', content: query } as Message;
     setMessages(prev => [...prev, newMessage]);
     setIsLoading(true);
-    // Prepare history payload for API
-    const history = messages.map(msg => ({ role: msg.role, content: msg.content }));
-    history.push({ role: 'user', content: text });
+    // Prepare a bounded history payload for API validation and request-size limits.
+    const previousHistory = messages
+      .filter(msg => !msg.isStreaming && (msg.role === 'user' || msg.role === 'assistant'))
+      .map(msg => ({
+        role: msg.role,
+        content: msg.content.trim().slice(0, MAX_HISTORY_CONTENT_LENGTH),
+      }))
+      .filter(msg => msg.content.length > 0);
+    const history = [
+      ...previousHistory.slice(-(MAX_HISTORY_MESSAGES - 1)),
+      { role: 'user' as const, content: query.slice(0, MAX_HISTORY_CONTENT_LENGTH) },
+    ];
     // Add empty placeholder for bot streaming
     setMessages(prev => [...prev, { role: 'assistant', content: '', isStreaming: true }]);
     try {
@@ -231,7 +247,7 @@ function App() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          query: text,
+          query,
           history,
           lang: language,
           title_filter: selectedTags.length > 0 ? selectedTags.map(t => t.title) : null,
@@ -240,7 +256,8 @@ function App() {
         })
       });
       if (!response.ok) {
-        throw new Error('Network response was not ok');
+        const errorText = await response.text().catch(() => '');
+        throw new Error(`Network response was not ok (${response.status}): ${errorText}`);
       }
       if (response.body) {
         const reader = response.body.getReader();

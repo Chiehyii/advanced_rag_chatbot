@@ -11,3 +11,6 @@ venv/
 node_modules/
 dist/
 .claude/
+
+# Python virtual environment
+.venv/

@@ -3,12 +3,13 @@ import sys
 import uuid
 import config
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 import asyncio
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 from typing import List, Optional
 import psycopg2
 from psycopg2 import sql as pg_sql
@@ -69,6 +70,11 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    logger.warning(f"[Validation] {request.method} {request.url.path} failed: {exc.errors()}")
+    return JSONResponse(status_code=422, content={"detail": exc.errors()})
+
 # --- Middleware ---
 app.add_middleware(
     CORSMiddleware,
@@ -91,23 +97,14 @@ _CSP = (
 
 @app.middleware("http")
 async def limit_request_body_size(request: Request, call_next):
-    max_bytes = config.MAX_REQUEST_BODY_BYTES
-    body = bytearray()
-    async for chunk in request.stream():
-        body.extend(chunk)
-        if len(body) > max_bytes:
-            return JSONResponse(status_code=413, content={"detail": "Request body too large"})
-
-    sent = False
-
-    async def receive():
-        nonlocal sent
-        if sent:
-            return {"type": "http.request", "body": b"", "more_body": False}
-        sent = True
-        return {"type": "http.request", "body": bytes(body), "more_body": False}
-
-    return await call_next(Request(request.scope, receive))
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > config.MAX_REQUEST_BODY_BYTES:
+                return JSONResponse(status_code=413, content={"detail": "Request body too large"})
+        except ValueError:
+            pass
+    return await call_next(request)
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
@@ -137,14 +134,58 @@ class HistoryMessage(BaseModel):
     role: str = Field(..., pattern='^(user|assistant)$')
     content: str = Field(..., min_length=1, max_length=2000)
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_history_message(cls, data):
+        if not isinstance(data, dict):
+            return data
+        normalized = dict(data)
+        normalized["content"] = str(normalized.get("content") or "").strip()[:2000]
+        return normalized
+
 class ChatRequest(BaseModel):
     """[OPT-3] Request model for a user's chat query — with length limits to prevent token abuse."""
     query: str = Field(..., min_length=1, max_length=1000)
-    history: List[HistoryMessage] | None = Field(None, max_length=20)
+    history: List[HistoryMessage] | None = Field(None)
     lang: Optional[str] = Field('zh', pattern='^(zh|en)$')
-    title_filter: List[str] | None = Field(None, max_length=3)
-    session_id: Optional[str] = Field(None, max_length=36)
-    user_id: Optional[str] = Field(None, max_length=36)
+    title_filter: List[str] | None = Field(None)
+    session_id: Optional[str] = Field(None)
+    user_id: Optional[str] = Field(None)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_chat_request(cls, data):
+        if not isinstance(data, dict):
+            return data
+        normalized = dict(data)
+        normalized["query"] = str(normalized.get("query") or "").strip()[:1000]
+
+        raw_history = normalized.get("history") or []
+        cleaned_history = []
+        if isinstance(raw_history, list):
+            for msg in raw_history:
+                if not isinstance(msg, dict):
+                    continue
+                role = msg.get("role")
+                content = str(msg.get("content") or "").strip()
+                if role in ("user", "assistant") and content:
+                    cleaned_history.append({"role": role, "content": content[:2000]})
+        normalized["history"] = cleaned_history[-20:] if cleaned_history else None
+
+        raw_titles = normalized.get("title_filter") or None
+        if isinstance(raw_titles, list):
+            normalized["title_filter"] = [
+                str(title).strip()[:120]
+                for title in raw_titles[:3]
+                if str(title).strip()
+            ] or None
+        else:
+            normalized["title_filter"] = None
+
+        for key in ("session_id", "user_id"):
+            value = normalized.get(key)
+            normalized[key] = str(value).strip()[:36] if value else None
+        return normalized
 
 class FeedbackRequest(BaseModel):
     """Request model for submitting feedback."""
@@ -163,13 +204,40 @@ async def health_check():
     db_status = "ok" if getattr(config, 'DB_POOL', None) else "unavailable"
     return {"status": "ok", "db": db_status}
 
+@app.post("/test")
+async def test_endpoint(request: Request):
+    body = await request.body()
+    return {"body_len": len(body), "body": body.decode('utf-8')}
+
 @app.post("/chat")
 @limiter.limit(config.RATE_LIMIT_CHAT)
-async def chat_endpoint(request: Request, chat_request: ChatRequest):
+async def chat_endpoint(request: Request):
     """
     Receives a user query and conversation history, processes it through the RAG pipeline,
     and returns a streaming response of the generated answer.
     """
+    raw_body = await request.body()
+    if not raw_body.strip():
+        logger.warning("[Chat] Empty request body")
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object")
+
+    try:
+        payload = json.loads(raw_body)
+    except json.JSONDecodeError as e:
+        preview = raw_body[:200].decode("utf-8", errors="replace")
+        logger.warning(f"[Chat] Invalid JSON request body: {e}; body_preview={preview!r}")
+        raise HTTPException(status_code=400, detail="Request body must be valid JSON")
+
+    if not isinstance(payload, dict):
+        logger.warning(f"[Chat] JSON payload must be an object, got {type(payload).__name__}")
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object")
+
+    try:
+        chat_request = ChatRequest.model_validate(payload)
+    except ValidationError as e:
+        logger.warning(f"[Chat] Invalid chat request fields: {e.errors()}")
+        raise HTTPException(status_code=422, detail=e.errors())
+
     # 取出 Middleware 注入的 request_id，以及前端傳入的 session_id / user_id
     rid = getattr(request.state, 'request_id', '-')
     sid = chat_request.session_id
