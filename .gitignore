@@ -5,6 +5,8 @@ __pycache__/
 logs/
 *.pyc
 *.log
+*.db
+stream_out.txt
 venv/
 node_modules/
 dist/

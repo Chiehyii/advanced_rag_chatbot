@@ -1,8 +1,7 @@
 import React, { useState } from 'react';
-import { Message, Language } from '../types';
 import { marked } from 'marked';
-import DOMPurify from 'dompurify';
-import { ThumbsUp, ThumbsDown, Globe, ChevronDown, ChevronRight, BookOpen, Loader2 } from 'lucide-react';
+import { BookOpen, ChevronDown, ChevronRight, Globe, Loader2, ThumbsDown, ThumbsUp } from 'lucide-react';
+import { Language, Message } from '../types';
 import { translations } from '../App';
 
 interface MessageBubbleProps {
@@ -12,6 +11,11 @@ interface MessageBubbleProps {
   language?: Language;
 }
 
+type ContextLike = {
+  source_file?: string;
+  source_url?: string;
+};
+
 export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedback, onChipClick, language = 'zh' }) => {
   const { role, content, contexts, logId, feedbackToken, chips, isStreaming, thinkingSteps } = message;
   const t = translations[language];
@@ -19,61 +23,122 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
   const [isMobileExpanded, setIsMobileExpanded] = useState(false);
   const [isThinkingCollapsed, setIsThinkingCollapsed] = useState(true);
 
-  // [SEC-5] 使用 URL 建構子驗證協議，防止 javascript: / data: 等惡意 URL
   const sanitizeUrl = (raw: string | undefined | null): string => {
     if (!raw || raw === '#') return '#';
     try {
       const normalized = raw.startsWith('http') ? raw : 'https://' + raw;
       const parsed = new URL(normalized);
-      // 只允許 https 和 http 協議，其他一律顯示安全的佔位符
       return ['https:', 'http:'].includes(parsed.protocol) ? parsed.href : '#';
     } catch {
-      return '#'; // URL 格式錯誤時也安全降級
+      return '#';
     }
   };
 
-  // 修改 createMarkup，讓它接收 contexts 陣列
-  const createMarkup = (text: string, ctxs: any[]) => {
-    // 1. 先把 Markdown 轉成 HTML，避免 marked 把之後注入的 HTML 標籤當文字跳脫
-    const rawHtml = marked.parse(text) as string;
+  const renderCitation = (num: string, key: string, ctxs: ContextLike[]) => {
+    const idx = parseInt(num, 10) - 1;
+    const ctx = ctxs && ctxs[idx] ? ctxs[idx] : null;
+    if (!ctx) return <sup key={key} className="inline-citation">[{num}]</sup>;
 
-    // 2. 再對 HTML 字串做引用標籤替換 [1] → Tooltip 結構
-    const processedHtml = rawHtml.replace(/\[(\d+)\]/g, (match, num) => {
-      const idx = parseInt(num) - 1;
-      const ctx = ctxs && ctxs[idx] ? ctxs[idx] : null;
+    const url = sanitizeUrl(ctx.source_url);
+    const title = ctx.source_file || t.unknown_source;
+    const domain = url !== '#' ? new URL(url).hostname : '';
 
-      // 如果找不到對應的文件，就保持原樣
-      if (!ctx) return `<sup class="inline-citation">${match}</sup>`;
-
-      // 取得網址、標題與內容片段
-      const url = sanitizeUrl(ctx.source_url);  // [SEC-5]
-      const title = ctx.source_file || t.unknown_source;
-      const domain = url !== '#' ? new URL(url).hostname : '';
-      // 產生 Tooltip 結構 (<a> 標籤負責點擊前往，後面的 span 是 Hover 卡片)
-      return `
-        <span class="citation-wrapper">
-          <a href="${url}" target="_blank" rel="noopener noreferrer" class="inline-citation">
-            <sup>[${num}]</sup>
-          </a>
-          <span class="citation-tooltip">
-            <span class="tooltip-title">${title}</span>
-            ${domain ? `<span class="tooltip-url">${domain}</span>` : ''}
-          </span>
+    return (
+      <span key={key} className="citation-wrapper">
+        <a href={url} target="_blank" rel="noopener noreferrer" className="inline-citation">
+          <sup>[{num}]</sup>
+        </a>
+        <span className="citation-tooltip">
+          <span className="tooltip-title">{title}</span>
+          {domain ? <span className="tooltip-url">{domain}</span> : null}
         </span>
-      `;
-    });
+      </span>
+    );
+  };
 
-    return {
-      __html: DOMPurify.sanitize(processedHtml, { ADD_ATTR: ['target', 'rel', 'class'] })
-    };
+  const renderInline = (text: string, keyPrefix: string, ctxs: ContextLike[]): React.ReactNode[] => {
+    const nodes: React.ReactNode[] = [];
+    const pattern = /(\[(\d+)\]|\[([^\]]+)\]\(([^)]+)\)|`([^`]+)`|\*\*([^*]+)\*\*)/g;
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = pattern.exec(text)) !== null) {
+      if (match.index > lastIndex) {
+        nodes.push(text.slice(lastIndex, match.index));
+      }
+
+      const key = `${keyPrefix}-${match.index}`;
+      if (match[2]) {
+        nodes.push(renderCitation(match[2], key, ctxs));
+      } else if (match[3] && match[4]) {
+        const url = sanitizeUrl(match[4]);
+        nodes.push(
+          <a key={key} href={url} target="_blank" rel="noopener noreferrer">
+            {match[3]}
+          </a>
+        );
+      } else if (match[5]) {
+        nodes.push(<code key={key}>{match[5]}</code>);
+      } else if (match[6]) {
+        nodes.push(<strong key={key}>{match[6]}</strong>);
+      }
+
+      lastIndex = pattern.lastIndex;
+    }
+
+    if (lastIndex < text.length) {
+      nodes.push(text.slice(lastIndex));
+    }
+
+    return nodes;
+  };
+
+  const renderMarkdown = (text: string, ctxs: ContextLike[]) => {
+    const tokens = marked.lexer(text, { gfm: true, breaks: true }) as any[];
+
+    return tokens.map((token, idx) => {
+      const key = `md-${idx}`;
+
+      if (token.type === 'heading') {
+        const HeadingTag = `h${Math.min(token.depth || 3, 4)}` as keyof JSX.IntrinsicElements;
+        return <HeadingTag key={key}>{renderInline(token.text || '', key, ctxs)}</HeadingTag>;
+      }
+
+      if (token.type === 'paragraph') {
+        return <p key={key}>{renderInline(token.text || '', key, ctxs)}</p>;
+      }
+
+      if (token.type === 'list') {
+        const ListTag = token.ordered ? 'ol' : 'ul';
+        return (
+          <ListTag key={key}>
+            {(token.items || []).map((item: any, itemIdx: number) => (
+              <li key={`${key}-item-${itemIdx}`}>{renderInline(item.text || '', `${key}-item-${itemIdx}`, ctxs)}</li>
+            ))}
+          </ListTag>
+        );
+      }
+
+      if (token.type === 'code') {
+        return (
+          <pre key={key}>
+            <code>{token.text || ''}</code>
+          </pre>
+        );
+      }
+
+      if (token.type === 'blockquote') {
+        return <blockquote key={key}>{renderInline(token.text || '', key, ctxs)}</blockquote>;
+      }
+
+      if (token.type === 'space') return null;
+
+      return <p key={key}>{renderInline(token.raw || token.text || '', key, ctxs)}</p>;
+    });
   };
 
   if (role === 'user') {
-    return (
-      <div className="message user-message">
-        {content}
-      </div>
-    );
+    return <div className="message user-message">{content}</div>;
   }
 
   return (
@@ -81,11 +146,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
       <div className="bot-message-content">
         <div className="message-body">
           <div className="bot-left-col">
-            {/* Thinking steps or content */}
-            <div
-              className="message bot-message"
-            >
-              {/* Thinking steps section — auto-collapsed when content starts */}
+            <div className="message bot-message">
               {thinkingSteps && thinkingSteps.length > 0 && (
                 <div className={`thinking-steps ${content ? 'collapsed' : 'expanded'}`}>
                   {content ? (
@@ -99,7 +160,6 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
                       </span>
                     </button>
                   ) : null}
-                  {/* Show list when: no content yet (still thinking), OR content exists but user expanded */}
                   {(!content || (content && !isThinkingCollapsed)) && (
                     <div className="thinking-list">
                       {thinkingSteps.map((step, idx) => (
@@ -117,11 +177,9 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
                   )}
                 </div>
               )}
-              {/* Main content */}
-              {content && (
-                <div dangerouslySetInnerHTML={createMarkup(content, contexts || [])} />
-              )}
+              {content && <div>{renderMarkdown(content, contexts || [])}</div>}
             </div>
+
             {logId && feedbackToken && !isStreaming && (
               <div className="feedback-buttons">
                 <button
@@ -157,7 +215,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
                 )}
               </div>
             )}
-            {/* Inline source cards — toggled by BookOpen icon */}
+
             {isMobileExpanded && contexts && contexts.length > 0 && !isStreaming && (
               <div className="inline-contexts">
                 {contexts.map((ctx, idx) => {
@@ -187,6 +245,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
                 })}
               </div>
             )}
+
             {chips && chips.length > 0 && !isStreaming && (
               <div className="chips-container">
                 {chips.map((chip, idx) => (
