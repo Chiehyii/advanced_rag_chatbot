@@ -5,7 +5,7 @@ Agent State Definition
 定義 LangGraph Agent 的共用狀態，所有 Node 都讀寫這個 State。
 """
 from __future__ import annotations
-from typing import Annotated, Any, TypedDict
+from typing import Annotated, TypedDict
 from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage
 
@@ -45,4 +45,4 @@ class AgentState(TypedDict, total=False):
     session_id: str | None
     user_id: str | None
     _profile_sufficient: bool  # profile_extraction_node 設定，供 routing 判斷
-    _usage: Any               # 各 node 的 OpenAI usage，由 stream_agent_pipeline 累加
+    _usage: dict | None       # node token usage; keep checkpoint payload JSON/msgpack-safe

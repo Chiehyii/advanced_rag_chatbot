@@ -451,9 +451,14 @@ async def stream_agent_pipeline(
                 # 累加各 node 的 token 使用量
                 node_usage = node_output.get("_usage")
                 if node_usage:
-                    _token_acc["prompt_tokens"] += node_usage.prompt_tokens or 0
-                    _token_acc["completion_tokens"] += node_usage.completion_tokens or 0
-                    _token_acc["total_tokens"] += node_usage.total_tokens or 0
+                    if isinstance(node_usage, dict):
+                        _token_acc["prompt_tokens"] += node_usage.get("prompt_tokens") or 0
+                        _token_acc["completion_tokens"] += node_usage.get("completion_tokens") or 0
+                        _token_acc["total_tokens"] += node_usage.get("total_tokens") or 0
+                    else:
+                        _token_acc["prompt_tokens"] += node_usage.prompt_tokens or 0
+                        _token_acc["completion_tokens"] += node_usage.completion_tokens or 0
+                        _token_acc["total_tokens"] += node_usage.total_tokens or 0
 
         # emit final node "done"
         if last_node:

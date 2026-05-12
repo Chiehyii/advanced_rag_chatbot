@@ -25,6 +25,16 @@ logger = get_logger(__name__)
 openai_client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
 
 
+def _usage_to_dict(usage) -> dict | None:
+    if not usage:
+        return None
+    return {
+        "prompt_tokens": usage.prompt_tokens or 0,
+        "completion_tokens": usage.completion_tokens or 0,
+        "total_tokens": usage.total_tokens or 0,
+    }
+
+
 def _safe_milvus_literal(value: object) -> str | None:
     if not isinstance(value, str):
         return None
@@ -125,7 +135,7 @@ async def analyze_and_extract_node(state: AgentState) -> dict:
                 "current_intent": "scholarship",
                 "user_profile": existing_profile,
                 "_profile_sufficient": False,
-                "_usage": completion.usage,
+                "_usage": _usage_to_dict(completion.usage),
             }
 
         # 設定意圖
@@ -138,7 +148,7 @@ async def analyze_and_extract_node(state: AgentState) -> dict:
                 "current_intent": "small_talk",
                 "user_profile": existing_profile,
                 "_profile_sufficient": False,
-                "_usage": completion.usage,
+                "_usage": _usage_to_dict(completion.usage),
             }
 
         # scholarship：合併到現有 profile（新值覆蓋舊值，但不清除舊的）
@@ -161,7 +171,7 @@ async def analyze_and_extract_node(state: AgentState) -> dict:
             "current_intent": "scholarship",
             "user_profile": new_profile,
             "_profile_sufficient": extracted.is_sufficient,
-            "_usage": completion.usage,
+            "_usage": _usage_to_dict(completion.usage),
         }
 
     except Exception as e:
@@ -412,7 +422,7 @@ async def generate_node(state: AgentState) -> dict:
     answer = response.choices[0].message.content.strip()
     logger.info(f"[Generate] Answer length: {len(answer)} chars, profile_sufficient={profile_sufficient}")
 
-    return {"messages": [AIMessage(content=answer)], "_usage": response.usage}
+    return {"messages": [AIMessage(content=answer)], "_usage": _usage_to_dict(response.usage)}
 
 
 # ─────────────────────────────────────────
@@ -453,4 +463,4 @@ async def small_talk_node(state: AgentState) -> dict:
     )
     answer = response.choices[0].message.content.strip()
     logger.info(f"[SmallTalk] Answer generated (length={len(answer)})")
-    return {"messages": [AIMessage(content=answer)], "retrieved_docs": [], "_usage": response.usage}
+    return {"messages": [AIMessage(content=answer)], "retrieved_docs": [], "_usage": _usage_to_dict(response.usage)}
