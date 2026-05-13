@@ -5,20 +5,17 @@ import config
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 import asyncio
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationError, model_validator
 from typing import List, Optional
 import psycopg2
 from psycopg2 import sql as pg_sql
-import traceback
 import json
 import time
 import hashlib
 from fastapi.responses import StreamingResponse, JSONResponse
-from rag_service import stream_chat_pipeline, stream_agent_pipeline
+from rag_service import stream_agent_pipeline
 import admin_api
 from scheduler import start_scheduler
 from logger import get_logger, request_id_var

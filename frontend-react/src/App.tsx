@@ -316,7 +316,7 @@ function App() {
                       if (newMessages[lastIdx].role === 'assistant') {
                         const existing = newMessages[lastIdx].thinkingSteps || [];
                         // Replace last step if it was 'running' and this is a 'done' for same concept
-                        let updated = [...existing];
+                        const updated = [...existing];
                         if (stepData.status === 'done' && updated.length > 0 && updated[updated.length - 1].status === 'running') {
                           updated[updated.length - 1] = stepData;
                         } else {
@@ -327,7 +327,7 @@ function App() {
                       return newMessages;
                     });
                   }
-                } catch (e) {
+                } catch {
                   // Fallback for raw text
                   fullAnswer += chunk;
                 }
