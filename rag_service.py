@@ -422,6 +422,7 @@ async def stream_agent_pipeline(
         return prepared
 
     async def _persist_streamed_answer(state: dict):
+        as_node = "small_talk" if state.get("current_intent") == "small_talk" else "generate"
         update = {
             "messages": [HumanMessage(content=question), AIMessage(content=full_answer)],
             "user_profile": state.get("user_profile", {}),
@@ -433,9 +434,9 @@ async def stream_agent_pipeline(
         }
         try:
             if hasattr(graph, "aupdate_state"):
-                await graph.aupdate_state(gconfig, update)
+                await graph.aupdate_state(gconfig, update, as_node=as_node)
             elif hasattr(graph, "update_state"):
-                await asyncio.to_thread(lambda: graph.update_state(gconfig, update))
+                await asyncio.to_thread(lambda: graph.update_state(gconfig, update, as_node=as_node))
         except Exception as e:
             logger.warning(f"[Agent] Failed to persist streamed answer to graph state: {e}")
 
