@@ -338,13 +338,8 @@ async def retrieve_node(state: AgentState) -> dict:
 # ─────────────────────────────────────────
 # Node 3: Generate RAG Answer（答案生成）
 # ─────────────────────────────────────────
-async def generate_node(state: AgentState) -> dict:
-    """
-    結合 user_profile + 檢索文件，生成最終 RAG 回答。
-    根據 _profile_sufficient 旗標動態控制回答深度：
-    - True: 完整表格+詳細資訊
-    - False: 預覽摘要+溫柔反問
-    """
+def build_rag_llm_messages(state: AgentState) -> list[dict]:
+    """Build the final RAG prompt messages shared by sync and streaming paths."""
     messages = state["messages"]
     lang = state.get("lang", "zh")
     cleaned_contexts = state.get("retrieved_docs", [])
@@ -419,6 +414,18 @@ async def generate_node(state: AgentState) -> dict:
 
     user_prompt = PROMPTS[lang]["rag_user"].format(question=question, context_for_llm=context_for_llm)
     llm_messages.append({"role": "user", "content": user_prompt})
+    return llm_messages
+
+
+async def generate_node(state: AgentState) -> dict:
+    """
+    結合 user_profile + 檢索文件，生成最終 RAG 回答。
+    根據 _profile_sufficient 旗標動態控制回答深度：
+    - True: 完整表格+詳細資訊
+    - False: 預覽摘要+溫柔反問
+    """
+    profile_sufficient = state.get("_profile_sufficient", False)
+    llm_messages = build_rag_llm_messages(state)
 
     response = await openai_client.chat.completions.create(
         model=config.OPENAI_MODEL_NAME,
@@ -435,8 +442,8 @@ async def generate_node(state: AgentState) -> dict:
 # ─────────────────────────────────────────
 # Node 4: Small Talk（閒聊）
 # ─────────────────────────────────────────
-async def small_talk_node(state: AgentState) -> dict:
-    """處理非獎學金相關的閒聊、問候等。"""
+def build_small_talk_llm_messages(state: AgentState) -> list[dict]:
+    """Build the small-talk prompt messages shared by sync and streaming paths."""
     messages = state["messages"]
     lang = state.get("lang", "zh")
 
@@ -461,6 +468,12 @@ async def small_talk_node(state: AgentState) -> dict:
         elif isinstance(msg, AIMessage):
             llm_messages.append({"role": "assistant", "content": msg.content})
     llm_messages.append({"role": "user", "content": last_human})
+    return llm_messages
+
+
+async def small_talk_node(state: AgentState) -> dict:
+    """處理非獎學金相關的閒聊、問候等。"""
+    llm_messages = build_small_talk_llm_messages(state)
 
     response = await openai_client.chat.completions.create(
         model=config.OPENAI_MODEL_NAME,

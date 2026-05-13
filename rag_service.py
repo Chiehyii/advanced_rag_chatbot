@@ -372,12 +372,16 @@ async def stream_agent_pipeline(
     user_id: str | None = None,
 ):
     """
-    LangGraph Agent 版本的對話 Pipeline。
-    使用 graph.astream() 逐節點串流，每個節點完成時 emit thinking_step 事件，
-    讓前端可以動態顯示 AI 的思考與檢索過程。
+    Agent pipeline with true token streaming for the final LLM generation.
     """
     from langchain_core.messages import HumanMessage, AIMessage
     from agent.graph import graph
+    from agent.nodes import (
+        analyze_and_extract_node,
+        retrieve_node,
+        build_rag_llm_messages,
+        build_small_talk_llm_messages,
+    )
 
     from types import SimpleNamespace
     start_time = time.time()
@@ -390,12 +394,71 @@ async def stream_agent_pipeline(
     labels = _STEP_LABELS.get(lang, _STEP_LABELS["zh"])
     _token_acc = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
+    def _accumulate_usage(usage):
+        if not usage:
+            return
+        if isinstance(usage, dict):
+            _token_acc["prompt_tokens"] += usage.get("prompt_tokens") or 0
+            _token_acc["completion_tokens"] += usage.get("completion_tokens") or 0
+            _token_acc["total_tokens"] += usage.get("total_tokens") or 0
+        else:
+            _token_acc["prompt_tokens"] += usage.prompt_tokens or 0
+            _token_acc["completion_tokens"] += usage.completion_tokens or 0
+            _token_acc["total_tokens"] += usage.total_tokens or 0
+
+    def _history_messages_without_duplicate():
+        prepared = []
+        for msg in history or []:
+            role = msg.get("role", "")
+            content = str(msg.get("content", "") or "")
+            if not content:
+                continue
+            if role == "user":
+                prepared.append(HumanMessage(content=content))
+            elif role == "assistant":
+                prepared.append(AIMessage(content=content))
+        if not prepared or not (isinstance(prepared[-1], HumanMessage) and prepared[-1].content == question):
+            prepared.append(HumanMessage(content=question))
+        return prepared
+
+    async def _persist_streamed_answer(state: dict):
+        update = {
+            "messages": [HumanMessage(content=question), AIMessage(content=full_answer)],
+            "user_profile": state.get("user_profile", {}),
+            "retrieved_docs": state.get("retrieved_docs", []),
+            "current_intent": state.get("current_intent", ""),
+            "lang": lang,
+            "title_filter": title_filter,
+            "_profile_sufficient": state.get("_profile_sufficient", False),
+        }
+        try:
+            if hasattr(graph, "aupdate_state"):
+                await graph.aupdate_state(gconfig, update)
+            elif hasattr(graph, "update_state"):
+                await asyncio.to_thread(lambda: graph.update_state(gconfig, update))
+        except Exception as e:
+            logger.warning(f"[Agent] Failed to persist streamed answer to graph state: {e}")
+
     try:
         thread_id = session_id or "default"
         gconfig = {"configurable": {"thread_id": thread_id}}
 
+        checkpoint_values = {}
+        try:
+            graph_state = await asyncio.to_thread(lambda: graph.get_state(gconfig))
+            checkpoint_values = graph_state.values if graph_state and graph_state.values else {}
+        except Exception:
+            checkpoint_values = {}
+
+        if checkpoint_values.get("messages"):
+            base_messages = list(checkpoint_values.get("messages", []))
+            base_messages.append(HumanMessage(content=question))
+        else:
+            base_messages = _history_messages_without_duplicate()
+
         input_state = {
-            "messages": [HumanMessage(content=question)],
+            "messages": base_messages,
+            "user_profile": checkpoint_values.get("user_profile", {}),
             "lang": lang,
             "title_filter": title_filter,
             "request_id": request_id,
@@ -403,85 +466,77 @@ async def stream_agent_pipeline(
             "user_id": user_id,
         }
 
-        # 預載歷史（首次使用時）
-        graph_state = None
-        try:
-            graph_state = await asyncio.to_thread(lambda: graph.get_state(gconfig))
-        except Exception:
-            pass
+        analyze_running = labels.get("analyze_and_extract", (None, None))[0]
+        if analyze_running:
+            yield {"type": "thinking_step", "data": {"step": analyze_running, "status": "running"}}
 
-        has_checkpoint = graph_state and graph_state.values and graph_state.values.get("messages")
+        analyze_output = await analyze_and_extract_node(input_state)
+        _accumulate_usage(analyze_output.get("_usage"))
+        input_state.update(analyze_output)
 
-        if not has_checkpoint and history and len(history) > 0:
-            pre_messages = []
-            for msg in history:
-                role = msg.get("role", "")
-                content = msg.get("content", "")
-                if role == "user":
-                    pre_messages.append(HumanMessage(content=content))
-                elif role == "assistant":
-                    pre_messages.append(AIMessage(content=content))
-            pre_messages.append(HumanMessage(content=question))
-            input_state["messages"] = pre_messages
+        analyze_done = labels.get("analyze_and_extract", (None, None))[1]
+        if analyze_done:
+            yield {
+                "type": "thinking_step",
+                "data": {
+                    "step": analyze_done,
+                    "detail": _build_step_detail("analyze_and_extract", analyze_output, lang),
+                    "status": "done",
+                },
+            }
 
-        # --- 使用 astream 逐節點串流 ---
-        cleaned_contexts = []
-        last_node = None
-        last_node_output = {}
+        if input_state.get("current_intent") == "small_talk":
+            llm_messages = build_small_talk_llm_messages(input_state)
+            temperature = 0.7
+            max_completion_tokens = 500
+            cleaned_contexts = []
+        else:
+            retrieve_running = labels.get("retrieve", (None, None))[0]
+            if retrieve_running:
+                yield {"type": "thinking_step", "data": {"step": retrieve_running, "status": "running"}}
 
-        async for event in graph.astream(input_state, gconfig, stream_mode="updates"):
-            for node_name, node_output in event.items():
-                # 1) 上一個節點完成 → emit "done" step (使用上一個節點的 output)
-                if last_node and last_node != node_name:
-                    done_label = labels.get(last_node, (None, None))[1]
-                    if done_label:
-                        detail = _build_step_detail(last_node, last_node_output, lang)
-                        yield {"type": "thinking_step", "data": {"step": done_label, "detail": detail, "status": "done"}}
+            retrieve_output = await retrieve_node(input_state)
+            input_state.update(retrieve_output)
+            cleaned_contexts = retrieve_output.get("retrieved_docs", [])
 
-                # 2) 當前節點開始 → emit "running" step
-                running_label = labels.get(node_name, (None, None))[0]
-                if running_label:
-                    yield {"type": "thinking_step", "data": {"step": running_label, "status": "running"}}
+            retrieve_done = labels.get("retrieve", (None, None))[1]
+            if retrieve_done:
+                yield {
+                    "type": "thinking_step",
+                    "data": {
+                        "step": retrieve_done,
+                        "detail": _build_step_detail("retrieve", retrieve_output, lang),
+                        "status": "done",
+                    },
+                }
 
-                last_node = node_name
-                last_node_output = node_output
+            llm_messages = build_rag_llm_messages(input_state)
+            temperature = 0.0
+            max_completion_tokens = None
 
-                # 3) 抓取有用的 state 更新
-                if "retrieved_docs" in node_output:
-                    cleaned_contexts = node_output["retrieved_docs"]
+        stream_kwargs = {
+            "model": config.OPENAI_MODEL_NAME,
+            "messages": llm_messages,
+            "temperature": temperature,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        if max_completion_tokens is not None:
+            stream_kwargs["max_completion_tokens"] = max_completion_tokens
 
-                if "messages" in node_output:
-                    for m in node_output["messages"]:
-                        if isinstance(m, AIMessage):
-                            full_answer = m.content
-
-                # 累加各 node 的 token 使用量
-                node_usage = node_output.get("_usage")
-                if node_usage:
-                    if isinstance(node_usage, dict):
-                        _token_acc["prompt_tokens"] += node_usage.get("prompt_tokens") or 0
-                        _token_acc["completion_tokens"] += node_usage.get("completion_tokens") or 0
-                        _token_acc["total_tokens"] += node_usage.get("total_tokens") or 0
-                    else:
-                        _token_acc["prompt_tokens"] += node_usage.prompt_tokens or 0
-                        _token_acc["completion_tokens"] += node_usage.completion_tokens or 0
-                        _token_acc["total_tokens"] += node_usage.total_tokens or 0
-
-        # emit final node "done"
-        if last_node:
-            done_label = labels.get(last_node, (None, None))[1]
-            if done_label:
-                detail = _build_step_detail(last_node, last_node_output, lang)
-                yield {"type": "thinking_step", "data": {"step": done_label, "detail": detail, "status": "done"}}
+        stream = await openai_client.chat.completions.create(**stream_kwargs)
+        async for chunk in stream:
+            if chunk.usage:
+                _accumulate_usage(chunk.usage)
+            if chunk.choices:
+                content = chunk.choices[0].delta.content or ""
+                if content:
+                    full_answer += content
+                    yield {"type": "content", "data": content}
 
         if not full_answer:
             full_answer = PROMPTS[lang]["no_result_answer"]
-
-        # 串流逐字送出 (打字機效果)
-        chunk_size = 20
-        for i in range(0, len(full_answer), chunk_size):
-            chunk = full_answer[i:i + chunk_size]
-            yield {"type": "content", "data": chunk}
+            yield {"type": "content", "data": full_answer}
 
         # 整理 unique contexts for display
         unique_display_contexts = []
@@ -496,6 +551,7 @@ async def stream_agent_pipeline(
         result_data = {"contexts": unique_display_contexts, "chips": []}
         rephrased_question = question
         stream_completed = True
+        await _persist_streamed_answer(input_state)
 
     except Exception as e:
         logger.error(f"[Agent] Pipeline error: {e}", exc_info=True)

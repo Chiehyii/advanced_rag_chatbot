@@ -299,7 +299,14 @@ async def chat_endpoint(request: Request):
             error_message = json.dumps({"type": "error", "data": "An error occurred on the server."})
             yield f"event: error\ndata: {error_message}\n\n"
 
-    response = StreamingResponse(event_generator(), media_type="text/event-stream")
+    response = StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
     response.headers["X-Chat-Session-Token"] = sign_session_id(sid, config.JWT_SECRET_KEY)
     if not verify_signed_session(anonymous_user_cookie, config.JWT_SECRET_KEY):
         response.set_cookie(
