@@ -33,16 +33,12 @@ export function AdminLayout({ onLogout }: AdminLayoutProps) {
     };
 
     const handleUnauthorized = useCallback(() => {
-        sessionStorage.removeItem('admin_jwt');
-        sessionStorage.removeItem('admin_refresh_jwt');
         onLogout();
         showToast('驗證過期，請重新登入', 'error');
     }, [onLogout]);
 
     const handleLogoutClick = async () => {
         await apiLogout();
-        sessionStorage.removeItem('admin_jwt');
-        sessionStorage.removeItem('admin_refresh_jwt');
         onLogout();
     };
 

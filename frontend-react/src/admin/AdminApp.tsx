@@ -1,20 +1,35 @@
 import { useState, useEffect } from 'react';
 import { AdminLogin } from './AdminLogin';
 import { AdminLayout } from './AdminLayout';
+import { apiCheckAuth } from './api';
 import './admin.css';
+
 export function AdminApp() {
-    const [token, setToken] = useState<string>(() => sessionStorage.getItem('admin_jwt') || '');
+    const [isAuthenticated, setIsAuthenticated] = useState(false);
+    const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+
     useEffect(() => {
         document.title = '獎學金知識庫管理中心';
+        apiCheckAuth()
+            .then(setIsAuthenticated)
+            .finally(() => setIsCheckingAuth(false));
     }, []);
-    const handleLoginSuccess = (newToken: string) => {
-        setToken(newToken);
+
+    const handleLoginSuccess = () => {
+        setIsAuthenticated(true);
     };
+
     const handleLogout = () => {
-        setToken('');
+        setIsAuthenticated(false);
     };
-    if (!token) {
+
+    if (isCheckingAuth) {
+        return <div style={{ padding: '20px', textAlign: 'center' }}>Loading...</div>;
+    }
+
+    if (!isAuthenticated) {
         return <AdminLogin onLoginSuccess={handleLoginSuccess} />;
     }
+
     return <AdminLayout onLogout={handleLogout} />;
 }

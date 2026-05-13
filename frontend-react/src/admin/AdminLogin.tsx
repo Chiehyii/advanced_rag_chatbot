@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { apiLogin } from './api';
 import './admin.css';
 interface AdminLoginProps {
-    onLoginSuccess: (token: string) => void;
+    onLoginSuccess: () => void;
 }
 export function AdminLogin({ onLoginSuccess }: AdminLoginProps) {
     const [username, setUsername] = useState('');
@@ -14,9 +14,8 @@ export function AdminLogin({ onLoginSuccess }: AdminLoginProps) {
         setLoading(true);
         setError('');
         try {
-            const token = await apiLogin(username, password);
-            sessionStorage.setItem('admin_jwt', token);
-            onLoginSuccess(token);
+            await apiLogin(username, password);
+            onLoginSuccess();
         } catch {
             setError('帳號或密碼錯誤');
         } finally {

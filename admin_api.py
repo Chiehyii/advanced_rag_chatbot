@@ -5,7 +5,7 @@ import hashlib
 import secrets
 from bs4 import BeautifulSoup
 from typing import List, Optional
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Request
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Request, Response
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from slowapi import Limiter
 from pydantic import BaseModel, Field, field_validator
@@ -79,7 +79,37 @@ class ScholarshipForm(BaseModel):
 
 # --- Security Setup ---
 import bcrypt
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/login", auto_error=False)
+ADMIN_ACCESS_COOKIE_NAME = "admin_access"
+ADMIN_REFRESH_COOKIE_NAME = "admin_refresh"
+
+
+def _cookie_kwargs():
+    return {
+        "httponly": True,
+        "secure": config.ENVIRONMENT == "production",
+        "samesite": "none" if config.ENVIRONMENT == "production" else "lax",
+    }
+
+
+def _set_auth_cookies(response: Response, access_token: str, refresh_token: str):
+    response.set_cookie(
+        ADMIN_ACCESS_COOKIE_NAME,
+        access_token,
+        max_age=config.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        **_cookie_kwargs(),
+    )
+    response.set_cookie(
+        ADMIN_REFRESH_COOKIE_NAME,
+        refresh_token,
+        max_age=config.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
+        **_cookie_kwargs(),
+    )
+
+
+def _clear_auth_cookies(response: Response):
+    response.delete_cookie(ADMIN_ACCESS_COOKIE_NAME, **_cookie_kwargs())
+    response.delete_cookie(ADMIN_REFRESH_COOKIE_NAME, **_cookie_kwargs())
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None, token_type: str = "access"):
     to_encode = data.copy()
@@ -130,12 +160,18 @@ def _issue_refresh_token(username: str, expires_delta: timedelta) -> str:
         )
     return token
 
-def verify_admin(token: str = Depends(oauth2_scheme)):
+def verify_admin(request: Request, token: str | None = Depends(oauth2_scheme)):
     credentials_exception = HTTPException(
         status_code=401,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    token = token or request.cookies.get(ADMIN_ACCESS_COOKIE_NAME)
+    if not token:
+        raise credentials_exception
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        if request.headers.get("X-Requested-With") != "XMLHttpRequest":
+            raise HTTPException(status_code=403, detail="Missing CSRF protection header")
     try:
         payload = jwt.decode(token, config.JWT_SECRET_KEY, algorithms=[config.ALGORITHM])
         username: str = payload.get("sub")
@@ -316,7 +352,7 @@ def dashboard_recent(limit: int = 20, current_admin: str = Depends(verify_admin)
 
 @router.post("/login")
 @limiter.limit("5/minute")  # [SEC-4] 防止暴力破解，每個 IP 每分鐘最多嘗試 5 次
-async def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
+async def login(request: Request, response: Response, form_data: OAuth2PasswordRequestForm = Depends()):
     if form_data.username != config.ADMIN_USERNAME:
         raise HTTPException(
             status_code=401,
@@ -351,25 +387,34 @@ async def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends
     
     refresh_token_expires = timedelta(days=config.REFRESH_TOKEN_EXPIRE_DAYS)
     refresh_token = _issue_refresh_token(config.ADMIN_USERNAME, refresh_token_expires)
+    _set_auth_cookies(response, access_token, refresh_token)
     return {
-        "access_token": access_token,
-        "refresh_token": refresh_token,
+        "status": "success",
         "token_type": "bearer"
     }
 
 class RefreshTokenRequest(BaseModel):
-    refresh_token: str
+    refresh_token: str | None = None
 
 @router.post("/refresh")
 @limiter.limit("10/minute")
-async def refresh_token(request: Request, refresh_request: RefreshTokenRequest):
+async def refresh_token(request: Request, response: Response, refresh_request: RefreshTokenRequest | None = None):
     credentials_exception = HTTPException(
         status_code=401,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    if request.headers.get("X-Requested-With") != "XMLHttpRequest":
+        raise HTTPException(status_code=403, detail="Missing CSRF protection header")
+    refresh_token_value = (
+        refresh_request.refresh_token
+        if refresh_request and refresh_request.refresh_token
+        else request.cookies.get(ADMIN_REFRESH_COOKIE_NAME)
+    )
+    if not refresh_token_value:
+        raise credentials_exception
     try:
-        payload = jwt.decode(refresh_request.refresh_token, config.JWT_SECRET_KEY, algorithms=[config.ALGORITHM])
+        payload = jwt.decode(refresh_token_value, config.JWT_SECRET_KEY, algorithms=[config.ALGORITHM])
         username: str = payload.get("sub")
         token_type: str = payload.get("type")
         jti: str = payload.get("jti")
@@ -377,7 +422,7 @@ async def refresh_token(request: Request, refresh_request: RefreshTokenRequest):
             raise credentials_exception
 
         _ensure_auth_tables()
-        token_hash = _hash_token(refresh_request.refresh_token)
+        token_hash = _hash_token(refresh_token_value)
         with get_db_cursor(commit=True) as (conn, cursor):
             cursor.execute(
                 """
@@ -401,14 +446,23 @@ async def refresh_token(request: Request, refresh_request: RefreshTokenRequest):
         )
         refresh_token_expires = timedelta(days=config.REFRESH_TOKEN_EXPIRE_DAYS)
         new_refresh_token = _issue_refresh_token(config.ADMIN_USERNAME, refresh_token_expires)
-        return {"access_token": access_token, "refresh_token": new_refresh_token, "token_type": "bearer"}
+        _set_auth_cookies(response, access_token, new_refresh_token)
+        return {"status": "success", "token_type": "bearer"}
     except jwt.InvalidTokenError:
         raise credentials_exception
 
 @router.post("/logout")
-async def logout(request: RefreshTokenRequest, current_admin: str = Depends(verify_admin)):
+async def logout(response: Response, request: Request, refresh_request: RefreshTokenRequest | None = None, current_admin: str = Depends(verify_admin)):
     try:
-        payload = jwt.decode(request.refresh_token, config.JWT_SECRET_KEY, algorithms=[config.ALGORITHM])
+        refresh_token_value = (
+            refresh_request.refresh_token
+            if refresh_request and refresh_request.refresh_token
+            else request.cookies.get(ADMIN_REFRESH_COOKIE_NAME)
+        )
+        if not refresh_token_value:
+            _clear_auth_cookies(response)
+            return {"status": "success"}
+        payload = jwt.decode(refresh_token_value, config.JWT_SECRET_KEY, algorithms=[config.ALGORITHM])
         jti = payload.get("jti")
         token_type = payload.get("type")
         username = payload.get("sub")
@@ -425,7 +479,13 @@ async def logout(request: RefreshTokenRequest, current_admin: str = Depends(veri
                 )
     except jwt.InvalidTokenError:
         pass
+    _clear_auth_cookies(response)
     return {"status": "success"}
+
+
+@router.get("/me")
+def admin_me(current_admin: str = Depends(verify_admin)):
+    return {"status": "success", "username": current_admin}
 
 def _parse_json_array(value):
     """Safely parse a JSON string into a list. Returns [] on failure."""
