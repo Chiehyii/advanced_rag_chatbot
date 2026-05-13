@@ -12,21 +12,11 @@ import './index.css';
 
 const AdminApp = React.lazy(() => import('./admin/AdminApp').then(module => ({ default: module.AdminApp })));
 const CHAT_STORAGE_KEY = 'tcu_scholarship_chat_history';
-const SESSION_ID_KEY = 'tcu_session_id';
-const USER_ID_KEY = 'tcu_user_id';
+const CHAT_SESSION_TOKEN_KEY = 'tcu_chat_session_token';
 const API_BASE_URL = import.meta.env.VITE_API_URL || '';
 const MAX_HISTORY_MESSAGES = 20;
 const MAX_HISTORY_CONTENT_LENGTH = 2000;
 
-/** 從指定的 Storage 中取得或產生一個新的 UUID */
-function getOrCreateId(storage: Storage, key: string): string {
-  let id = storage.getItem(key);
-  if (!id) {
-    id = crypto.randomUUID();
-    storage.setItem(key, id);
-  }
-  return id;
-}
 // --- i18n Dictionaries ---
 export const translations = {
   zh: {
@@ -182,9 +172,8 @@ function App() {
     }
   }, [theme]);
   // --- 追蹤 ID ---
-  const sessionIdRef = useRef(getOrCreateId(sessionStorage, SESSION_ID_KEY));
+  const chatSessionTokenRef = useRef(sessionStorage.getItem(CHAT_SESSION_TOKEN_KEY) || '');
   const resetServerSessionRef = useRef(false);
-  const userId = useRef(getOrCreateId(localStorage, USER_ID_KEY)).current;
   // [PERF-4] RAF handle 用於批次更新串流內容，避免每個 token 就觸發一次 re-render
   const rafRef = useRef<number | null>(null);
   const fullAnswerRef = useRef<string>(''); // 持綌最新的 fullAnswer，供 RAF closure 使用
@@ -253,12 +242,16 @@ function App() {
           history,
           lang: language,
           title_filter: selectedTags.length > 0 ? selectedTags.map(t => t.title) : null,
-          session_id: sessionIdRef.current,
-          user_id: userId,
+          chat_session_token: chatSessionTokenRef.current || null,
           reset_session: resetServerSessionRef.current,
         })
       });
       resetServerSessionRef.current = false;
+      const nextChatSessionToken = response.headers.get('X-Chat-Session-Token');
+      if (nextChatSessionToken) {
+        chatSessionTokenRef.current = nextChatSessionToken;
+        sessionStorage.setItem(CHAT_SESSION_TOKEN_KEY, nextChatSessionToken);
+      }
       if (!response.ok) {
         const errorText = await response.text().catch(() => '');
         throw new Error(`Network response was not ok (${response.status}): ${errorText}`);
@@ -389,9 +382,8 @@ function App() {
     setSelectedTags([]);
     try {
       sessionStorage.removeItem(CHAT_STORAGE_KEY);
-      const newSessionId = crypto.randomUUID();
-      sessionStorage.setItem(SESSION_ID_KEY, newSessionId);
-      sessionIdRef.current = newSessionId;
+      sessionStorage.removeItem(CHAT_SESSION_TOKEN_KEY);
+      chatSessionTokenRef.current = '';
       resetServerSessionRef.current = true;
     } catch (e) {
       console.warn('Failed to clear chat history from sessionStorage:', e);

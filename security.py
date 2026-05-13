@@ -3,7 +3,7 @@ import hmac
 
 from fastapi.responses import JSONResponse
 
-SESSION_COOKIE_NAME = "chat_session"
+ANONYMOUS_USER_COOKIE_NAME = "anonymous_user"
 
 
 def sign_session_id(session_id: str, secret_key: str) -> str:

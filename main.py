@@ -25,8 +25,8 @@ from logger import get_logger, request_id_var
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from security import (
+    ANONYMOUS_USER_COOKIE_NAME,
     RequestBodyLimitMiddleware,
-    SESSION_COOKIE_NAME,
     sign_session_id,
     verify_signed_session,
 )
@@ -89,6 +89,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "Accept", "X-Request-ID", "X-Requested-With"],
+    expose_headers=["X-Chat-Session-Token"],
 )
 app.add_middleware(RequestBodyLimitMiddleware, max_body_size=config.MAX_REQUEST_BODY_BYTES)
 
@@ -147,6 +148,7 @@ class ChatRequest(BaseModel):
     lang: Optional[str] = Field('zh', pattern='^(zh|en)$')
     title_filter: List[str] | None = Field(None)
     session_id: Optional[str] = Field(None)
+    chat_session_token: Optional[str] = Field(None)
     user_id: Optional[str] = Field(None)
     reset_session: bool = False
 
@@ -180,9 +182,9 @@ class ChatRequest(BaseModel):
         else:
             normalized["title_filter"] = None
 
-        for key in ("session_id", "user_id"):
+        for key in ("session_id", "chat_session_token", "user_id"):
             value = normalized.get(key)
-            normalized[key] = str(value).strip()[:36] if value else None
+            normalized[key] = str(value).strip()[:160] if value else None
         return normalized
 
 class FeedbackRequest(BaseModel):
@@ -238,12 +240,13 @@ async def chat_endpoint(request: Request):
         logger.warning(f"[Chat] Invalid chat request fields: {e.errors()}")
         raise HTTPException(status_code=422, detail=e.errors())
 
-    # 取出 Middleware 注入的 request_id，以及前端傳入的 session_id / user_id
+    # request_id comes from middleware; chat session is a per-tab signed token.
+    # anonymous user id is a backend-controlled signed cookie for aggregate stats.
     rid = getattr(request.state, 'request_id', '-')
-    signed_cookie = request.cookies.get(SESSION_COOKIE_NAME)
-    sid = None if chat_request.reset_session else verify_signed_session(signed_cookie, config.JWT_SECRET_KEY)
+    sid = None if chat_request.reset_session else verify_signed_session(chat_request.chat_session_token, config.JWT_SECRET_KEY)
     sid = sid or uuid.uuid4().hex
-    uid = None
+    anonymous_user_cookie = request.cookies.get(ANONYMOUS_USER_COOKIE_NAME)
+    uid = verify_signed_session(anonymous_user_cookie, config.JWT_SECRET_KEY) or uuid.uuid4().hex
     
     # 📝 INFO：記錄正常的請求進入
     logger.info(f"[Chat] Received new chat stream request (session={sid}, user={uid})")
@@ -300,14 +303,15 @@ async def chat_endpoint(request: Request):
             yield f"event: error\ndata: {error_message}\n\n"
 
     response = StreamingResponse(event_generator(), media_type="text/event-stream")
-    if chat_request.reset_session or not verify_signed_session(signed_cookie, config.JWT_SECRET_KEY):
+    response.headers["X-Chat-Session-Token"] = sign_session_id(sid, config.JWT_SECRET_KEY)
+    if not verify_signed_session(anonymous_user_cookie, config.JWT_SECRET_KEY):
         response.set_cookie(
-            key=SESSION_COOKIE_NAME,
-            value=sign_session_id(sid, config.JWT_SECRET_KEY),
+            key=ANONYMOUS_USER_COOKIE_NAME,
+            value=sign_session_id(uid, config.JWT_SECRET_KEY),
             httponly=True,
             secure=_is_production,
             samesite="none" if _is_production else "lax",
-            max_age=60 * 60 * 24 * 30,
+            max_age=60 * 60 * 24 * 90,
         )
     return response
 
