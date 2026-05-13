@@ -177,6 +177,21 @@ function App() {
   // [PERF-4] RAF handle 用於批次更新串流內容，避免每個 token 就觸發一次 re-render
   const rafRef = useRef<number | null>(null);
   const fullAnswerRef = useRef<string>(''); // 持綌最新的 fullAnswer，供 RAF closure 使用
+  const flushStreamingContent = () => {
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    const latest = fullAnswerRef.current;
+    setMessages(prev => {
+      const newMessages = [...prev];
+      const lastIdx = newMessages.length - 1;
+      if (lastIdx >= 0 && newMessages[lastIdx].role === 'assistant') {
+        newMessages[lastIdx] = { ...newMessages[lastIdx], content: latest };
+      }
+      return newMessages;
+    });
+  };
   // Feedback state
   const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
   const [currentFeedbackLogId, setCurrentFeedbackLogId] = useState<string | null>(null);
@@ -272,11 +287,8 @@ function App() {
             buffer = lines.pop() || ''; // keep incomplete line
             for (const line of lines) {
               if (line.startsWith('event: end_stream')) {
-                // [PERF-4] 尾區到達前先沖溅剩餘的 RAF
-                if (rafRef.current !== null) {
-                  cancelAnimationFrame(rafRef.current);
-                  rafRef.current = null;
-                }
+                // Flush coalesced chunks before the final event marks streaming complete.
+                flushStreamingContent();
                 const dataLine = line.substring(line.indexOf('data: ') + 6);
                 if (dataLine.trim()) {
                   try {
@@ -370,10 +382,7 @@ function App() {
       });
     } finally {
       // [PERF-4] 確保离開時清除殘餘的 RAF
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
+      flushStreamingContent();
       setIsLoading(false);
     }
   };
