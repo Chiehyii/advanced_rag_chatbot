@@ -58,25 +58,17 @@ def create_database_and_table():
             completion_tokens INTEGER,
             total_tokens INTEGER,
             feedback_type TEXT,
-            feedback_text TEXT
+            feedback_text TEXT,
+            feedback_token_hash VARCHAR(64)
         );
         """).format(table=sql.Identifier(TABLE_NAME))
 
         # Execute the SQL statement
         cursor.execute(create_table_query)
 
-        # --- Migration: 為已存在的資料表安全新增欄位 ---
-        migration_queries = [
-            sql.SQL("ALTER TABLE {table} ADD COLUMN IF NOT EXISTS request_id VARCHAR(36);").format(table=sql.Identifier(TABLE_NAME)),
-            sql.SQL("ALTER TABLE {table} ADD COLUMN IF NOT EXISTS session_id VARCHAR(36);").format(table=sql.Identifier(TABLE_NAME)),
-            sql.SQL("ALTER TABLE {table} ADD COLUMN IF NOT EXISTS user_id VARCHAR(36);").format(table=sql.Identifier(TABLE_NAME)),
-        ]
-        for mq in migration_queries:
-            cursor.execute(mq)
-
         # Create scholarships table
         create_scholarships_table_query = sql.SQL("""
-        CREATE TABLE IF NOT EXISTS scholarships (
+        CREATE TABLE IF NOT EXISTS tcuscholarships (
             scholarship_code VARCHAR(50) PRIMARY KEY,
             title VARCHAR(255) NOT NULL,
             link TEXT,
@@ -84,6 +76,8 @@ def create_database_and_table():
             education_system JSONB,
             tags JSONB,
             identity JSONB,
+            registered_residence JSONB,
+            nationality JSONB,
             amount_summary TEXT,
             description TEXT,
             application_date_text TEXT,
@@ -98,9 +92,32 @@ def create_database_and_table():
         """)
         cursor.execute(create_scholarships_table_query)
 
+        # --- Migration: 為已存在的資料表安全新增欄位 ---
+        migration_queries = [
+            sql.SQL("ALTER TABLE {table} ADD COLUMN IF NOT EXISTS request_id VARCHAR(36);").format(table=sql.Identifier(TABLE_NAME)),
+            sql.SQL("ALTER TABLE {table} ADD COLUMN IF NOT EXISTS session_id VARCHAR(36);").format(table=sql.Identifier(TABLE_NAME)),
+            sql.SQL("ALTER TABLE {table} ADD COLUMN IF NOT EXISTS user_id VARCHAR(36);").format(table=sql.Identifier(TABLE_NAME)),
+            sql.SQL("ALTER TABLE {table} ADD COLUMN IF NOT EXISTS feedback_token_hash VARCHAR(64);").format(table=sql.Identifier(TABLE_NAME)),
+            sql.SQL("ALTER TABLE tcuscholarships ADD COLUMN IF NOT EXISTS registered_residence JSONB;"),
+            sql.SQL("ALTER TABLE tcuscholarships ADD COLUMN IF NOT EXISTS nationality JSONB;"),
+        ]
+        for mq in migration_queries:
+            cursor.execute(mq)
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS admin_refresh_tokens (
+            jti VARCHAR(64) PRIMARY KEY,
+            token_hash VARCHAR(64) NOT NULL,
+            subject VARCHAR(255) NOT NULL,
+            expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            revoked_at TIMESTAMP WITH TIME ZONE,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+
         # Commit the changes
         conn.commit()
-        logger.info(f"Database '{DB_NAME}', table '{TABLE_NAME}', and 'scholarships' table are set up successfully in PostgreSQL.")
+        logger.info(f"Database '{DB_NAME}', table '{TABLE_NAME}', and 'tcuscholarships' table are set up successfully in PostgreSQL.")
 
     except psycopg2.Error as e:
         # 🚨 ERROR：資料庫建立錯誤

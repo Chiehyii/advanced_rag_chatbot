@@ -1,6 +1,7 @@
-// Type declarations for marked.js which is loaded via CDN
+// Type declarations for libraries loaded via CDN
 declare const marked: any;
 declare const Choices: any;
+declare const DOMPurify: any;
 
 interface Scholarship {
     scholarship_code: string;
@@ -60,8 +61,6 @@ document.addEventListener('DOMContentLoaded', () => {
     let filterTagsChoices: any = null;
     let filterIdentityChoices: any = null;
 
-    let authToken = localStorage.getItem('admin_jwt') || '';
-
     // --- Init ---
     checkAuth();
 
@@ -76,7 +75,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Live preview for markdown
     markdownInput.addEventListener('input', () => {
         if (typeof marked !== 'undefined') {
-            markdownPreview.innerHTML = marked.parse(markdownInput.value);
+            markdownPreview.innerHTML = DOMPurify.sanitize(marked.parse(markdownInput.value));
         }
     });
 
@@ -84,17 +83,27 @@ document.addEventListener('DOMContentLoaded', () => {
     // Helper to perform authenticated fetch
     async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
         if (!options.headers) options.headers = {} as any;
-        (options.headers as any)['Authorization'] = `Bearer ${authToken}`;
+        (options.headers as any)['X-Requested-With'] = 'XMLHttpRequest';
 
-        const res = await fetch(url, options);
+        let res = await fetch(url, { ...options, credentials: 'include' });
         if (res.status === 401) {
-            logout();
+            const refreshRes = await fetch('/api/refresh', {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'X-Requested-With': 'XMLHttpRequest' },
+            });
+            if (refreshRes.ok) {
+                res = await fetch(url, { ...options, credentials: 'include' });
+            } else {
+                logout();
+            }
         }
         return res;
     }
 
-    function checkAuth() {
-        if (!authToken) {
+    async function checkAuth() {
+        const res = await authFetch('/api/me');
+        if (!res.ok) {
             loginOverlay.classList.add('active');
         } else {
             loginOverlay.classList.remove('active');
@@ -104,8 +113,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function logout() {
-        authToken = '';
-        localStorage.removeItem('admin_jwt');
         loginOverlay.classList.add('active');
         showToast('驗證過期，請重新登入', 'error');
     }
@@ -127,15 +134,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const res = await fetch('/api/login', {
                 method: 'POST',
+                credentials: 'include',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                 body: formData
             });
 
             if (!res.ok) throw new Error('登入失敗');
-
-            const data = await res.json();
-            authToken = data.access_token;
-            localStorage.setItem('admin_jwt', authToken);
 
             loginOverlay.classList.remove('active');
             showToast('登入成功', 'success');

@@ -46,18 +46,14 @@ async def _translate_to_zh(text: str) -> str:
     response = await openai_client.chat.completions.create(
         model=config.OPENAI_MODEL_NAME,
         messages=[
-            {"role": "system", "content": (
-                "You are a professional translator. "
-                "Translate the user's text into Traditional Chinese (繁體中文). "
-                "Output ONLY the translated text, no explanations."
-            )},
+            {"role": "system", "content": PROMPTS['zh']['translate_system']},
             {"role": "user", "content": text}
         ],
         temperature=0.0,
         max_completion_tokens=500,
     )
     translated = response.choices[0].message.content.strip()
-    logger.info(f"[Translate] '{text}' → '{translated}'")
+    logger.info(f"[Translate] Completed translation (input_len={len(text)}, output_len={len(translated)})")
     return translated
 
 def _rephrase_fallback(retry_state):
@@ -96,7 +92,7 @@ async def _rephrase_question_with_history(history: list, question: str, lang: st
     if not rephrased_question:
         return question
     # 📝 INFO：記錄問題重構成功
-    logger.info(f"[Rephrase] Successfully rephrased question: {rephrased_question}")
+    logger.info(f"[Rephrase] Successfully rephrased question (length={len(rephrased_question)})")
     return rephrased_question
 
 class SuggestedReplies(BaseModel):

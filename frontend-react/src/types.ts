@@ -5,13 +5,21 @@ export interface Context {
   score?: number;
 }
 
+export interface ThinkingStep {
+  step: string;
+  detail?: string;
+  status: 'running' | 'done';
+}
+
 export interface Message {
   role: 'user' | 'assistant';
   content: string;
   contexts?: Context[];
   logId?: string;
+  feedbackToken?: string;
   chips?: string[];
   isStreaming?: boolean;
+  thinkingSteps?: ThinkingStep[];
 }
 
 export type Language = 'zh' | 'en';

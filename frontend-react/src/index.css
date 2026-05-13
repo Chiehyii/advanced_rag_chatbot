@@ -121,7 +121,7 @@ body {
 }
 
 #chat-container {
-  max-width: 1050px;
+  max-width: 800px;
   width: 100%;
   margin: 0 auto;
   display: flex;
@@ -587,9 +587,8 @@ body {
   align-self: flex-end;
   background-color: var(--user-msg-bg);
   border-bottom-right-radius: 4px;
-  max-width: calc(60% - 360px / 2);
-  /* right margin = contexts(320) + gap(40) = 360px so user msg aligns with bot-left-col */
-  margin: 10px 360px 20px 0px;
+  max-width: 70%;
+  margin: 10px 0 20px 0;
 }
 
 .bot-message-container {
@@ -619,7 +618,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  max-width: calc(100% - 360px);
+  max-width: 100%;
 }
 
 .avatar {
@@ -639,42 +638,112 @@ body {
   border-radius: 0;
 }
 
-.bot-message .thinking {
-  font-style: italic;
-  color: #888;
+/* ======== Thinking Steps ======== */
+.thinking-steps {
+  margin-bottom: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-color);
 }
 
-.contexts {
-  width: 320px;
-  flex-shrink: 0;
+.thinking-steps.collapsed {
+  border-bottom: none;
+  margin-bottom: 15px;
+  padding-bottom: 0;
+}
+
+.thinking-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 0;
+  color: var(--text-muted);
+  font-family: var(--font-family);
+  font-size: 0.8rem;
+  transition: color 0.2s;
+}
+
+.thinking-toggle:hover {
+  color: var(--text-color);
+}
+
+.thinking-toggle-text {
+  font-style: italic;
+}
+
+.thinking-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  position: sticky;
-  top: 20px;
-  align-self: flex-start;
-  padding-bottom: 60px;
+  gap: 4px;
 }
 
-.contexts-header {
+.thinking-item {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 5px;
-}
-
-.contexts h4 {
-  margin: 0;
-  font-size: 0.9rem;
+  gap: 8px;
+  font-size: 0.85rem;
+  padding: 3px 0;
   color: var(--text-muted);
-  font-weight: 600;
+  animation: fadeInStep 0.3s ease-out;
 }
 
-/* Hidden on desktop */
-.mobile-toggle-icon,
-.mobile-source-toggle-btn,
-.mobile-inline-contexts {
-  display: none !important;
+.thinking-item.thinking-done {
+  color: var(--text-color);
+}
+
+.thinking-icon {
+  display: flex;
+  align-items: center;
+  width: 16px;
+  flex-shrink: 0;
+}
+
+.thinking-text {
+  flex-shrink: 0;
+}
+
+.thinking-detail {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  opacity: 0.8;
+  margin-left: 4px;
+}
+
+/* Spinning animation for Loader2 icon */
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes fadeInStep {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ======== Inline Source Cards (unified for all screens) ======== */
+.inline-contexts {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  animation: fadeInStep 0.3s ease-out;
 }
 
 .context-cards-list {
@@ -793,6 +862,11 @@ body {
   font-weight: 600;
 }
 
+.markdown-table-wrapper {
+  width: 100%;
+  overflow: visible;
+}
+
 .bot-message table {
   width: 100%;
   border-collapse: collapse;
@@ -809,7 +883,21 @@ body {
 .bot-message td {
   padding: 10px 12px;
   text-align: left;
+  vertical-align: top;
+  line-height: 1.45;
+  word-break: normal;
+  overflow-wrap: normal;
   border-bottom: 1px solid var(--border-color);
+}
+
+.bot-message th:first-child,
+.bot-message td:first-child {
+  width: 28%;
+}
+
+.bot-message th:not(:first-child),
+.bot-message td:not(:first-child) {
+  width: 18%;
 }
 
 .bot-message th {
@@ -894,15 +982,12 @@ body {
 }
 
 #input-form {
-  /* Match chat-container: max-width 1050px, centered */
-  max-width: 1050px;
+  max-width: 800px;
   width: 100%;
   display: flex;
   flex-direction: column;
-  /* left=container-padding(15px), right=contexts(320)+gap(40)+container-pad(15)=375px */
-  padding: 0.75rem 375px 1rem 15px;
+  padding: 0.75rem 15px 1rem 15px;
   box-sizing: border-box;
-
 }
 
 #input-area.initial #input-form {
@@ -1227,18 +1312,6 @@ body {
     /* Take full width on mobile */
   }
 
-  /* Make table horizontally scrollable on mobile without squishing columns */
-  .bot-message table {
-    display: block;
-    overflow-x: auto;
-    overflow-y: hidden;
-    -webkit-overflow-scrolling: touch;
-  }
-  .bot-message th,
-  .bot-message td {
-    min-width: 85px;
-  }
-
   .contexts {
     width: 100%;
     /* Context cards take full width */
@@ -1282,8 +1355,9 @@ body {
 
   #input-form {
     /* Full width on mobile, no right-side offset */
+    max-width: 800px;
     padding: 0.5rem 12px 0.75rem 12px;
-    max-width: 100%;
+    width: 100%;
   }
 
   .example-questions-container {
@@ -1772,6 +1846,26 @@ a.inline-citation:hover sup {
 
 /* ======== RWD for Filter Modal ======== */
 @media (max-width: 768px) {
+  .markdown-table-wrapper {
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .bot-message table {
+    min-width: 760px;
+  }
+
+  .bot-message th:first-child,
+  .bot-message td:first-child {
+    min-width: 220px;
+  }
+
+  .bot-message th:not(:first-child),
+  .bot-message td:not(:first-child) {
+    min-width: 130px;
+  }
+
   .filter-modal {
     width: 95%;
     max-height: 85vh;

@@ -1,20 +1,20 @@
 import re
 import uuid
 import json
-import requests
+import hashlib
+import secrets
 from bs4 import BeautifulSoup
 from typing import List, Optional
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Request
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Request, Response
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from slowapi import Limiter
-from slowapi.util import get_remote_address
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from openai import OpenAI
 import config
-import hashlib
 from datetime import datetime, timedelta, timezone
 import jwt
-from utils import is_safe_url
+from psycopg2 import sql as pg_sql
+from utils import safe_fetch_text
 from logger import get_logger
 from prompts import PROMPTS
 from milvus_service import init_milvus_collection, _insert_chunks_to_milvus
@@ -25,32 +25,91 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api", tags=["admin"])
 openai_client = OpenAI(api_key=config.OPENAI_API_KEY)
+_auth_tables_ready = False
+
+def _get_real_ip(request: Request) -> str:
+    forwarded_for = request.headers.get("X-Forwarded-For", "")
+    if config.TRUST_PROXY_HEADERS and forwarded_for:
+        return forwarded_for.split(",")[-1].strip()
+    return request.client.host if request.client else "127.0.0.1"
 
 # [SEC-4] 管理後台專屬的速率限制器
-limiter = Limiter(key_func=get_remote_address)
+limiter = Limiter(key_func=_get_real_ip)
 
 # --- Models ---
 class ExtractRequest(BaseModel):
-    url: Optional[str] = None
-    text: Optional[str] = None
+    url: Optional[str] = Field(None, max_length=500)
+    text: Optional[str] = Field(None, max_length=8000)
 
 class ScholarshipForm(BaseModel):
-    scholarship_code: str
-    title: str
-    link: Optional[str] = ""
-    category: Optional[str] = ""
-    education_system: List[str] = []
-    tags: List[str] = []
-    identity: List[str] = []
-    amount_summary: Optional[str] = ""
-    description: Optional[str] = ""
-    application_date_text: Optional[str] = ""
-    contact: Optional[str] = ""
-    markdown_content: str
+    scholarship_code: str = Field(..., min_length=1, max_length=80)
+    title: str = Field(..., min_length=1, max_length=200)
+    link: Optional[str] = Field("", max_length=500)
+    category: Optional[str] = Field("", max_length=100)
+    education_system: List[str] = Field(default_factory=list, max_length=20)
+    tags: List[str] = Field(default_factory=list, max_length=30)
+    identity: List[str] = Field(default_factory=list, max_length=30)
+    registered_residence: List[str] = Field(default_factory=list, max_length=30)
+    nationality: List[str] = Field(default_factory=list, max_length=30)
+    amount_summary: Optional[str] = Field("", max_length=1000)
+    description: Optional[str] = Field("", max_length=5000)
+    application_date_text: Optional[str] = Field("", max_length=1000)
+    contact: Optional[str] = Field("", max_length=1000)
+    markdown_content: str = Field(..., min_length=1, max_length=200000)
+
+    @field_validator(
+        "education_system",
+        "tags",
+        "identity",
+        "registered_residence",
+        "nationality",
+        mode="before",
+    )
+    @classmethod
+    def normalize_short_string_list(cls, value):
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            return value
+        return [
+            str(item).strip()[:120]
+            for item in value
+            if str(item).strip()
+        ]
 
 # --- Security Setup ---
 import bcrypt
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/login", auto_error=False)
+ADMIN_ACCESS_COOKIE_NAME = "admin_access"
+ADMIN_REFRESH_COOKIE_NAME = "admin_refresh"
+
+
+def _cookie_kwargs():
+    return {
+        "httponly": True,
+        "secure": config.ENVIRONMENT == "production",
+        "samesite": "none" if config.ENVIRONMENT == "production" else "lax",
+    }
+
+
+def _set_auth_cookies(response: Response, access_token: str, refresh_token: str):
+    response.set_cookie(
+        ADMIN_ACCESS_COOKIE_NAME,
+        access_token,
+        max_age=config.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        **_cookie_kwargs(),
+    )
+    response.set_cookie(
+        ADMIN_REFRESH_COOKIE_NAME,
+        refresh_token,
+        max_age=config.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
+        **_cookie_kwargs(),
+    )
+
+
+def _clear_auth_cookies(response: Response):
+    response.delete_cookie(ADMIN_ACCESS_COOKIE_NAME, **_cookie_kwargs())
+    response.delete_cookie(ADMIN_REFRESH_COOKIE_NAME, **_cookie_kwargs())
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None, token_type: str = "access"):
     to_encode = data.copy()
@@ -62,12 +121,57 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None, toke
     encoded_jwt = jwt.encode(to_encode, config.JWT_SECRET_KEY, algorithm=config.ALGORITHM)
     return encoded_jwt
 
-def verify_admin(token: str = Depends(oauth2_scheme)):
+def _hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+def _ensure_auth_tables():
+    global _auth_tables_ready
+    if _auth_tables_ready:
+        return
+    with get_db_cursor(commit=True) as (conn, cursor):
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS admin_refresh_tokens (
+                jti VARCHAR(64) PRIMARY KEY,
+                token_hash VARCHAR(64) NOT NULL,
+                subject VARCHAR(255) NOT NULL,
+                expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+                revoked_at TIMESTAMP WITH TIME ZONE,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+    _auth_tables_ready = True
+
+def _issue_refresh_token(username: str, expires_delta: timedelta) -> str:
+    _ensure_auth_tables()
+    jti = secrets.token_urlsafe(24)
+    expires_at = datetime.now(timezone.utc) + expires_delta
+    token = create_access_token(
+        data={"sub": username, "jti": jti},
+        expires_delta=expires_delta,
+        token_type="refresh",
+    )
+    with get_db_cursor(commit=True) as (conn, cursor):
+        cursor.execute(
+            """
+            INSERT INTO admin_refresh_tokens (jti, token_hash, subject, expires_at)
+            VALUES (%s, %s, %s, %s)
+            """,
+            (jti, _hash_token(token), username, expires_at),
+        )
+    return token
+
+def verify_admin(request: Request, token: str | None = Depends(oauth2_scheme)):
     credentials_exception = HTTPException(
         status_code=401,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    token = token or request.cookies.get(ADMIN_ACCESS_COOKIE_NAME)
+    if not token:
+        raise credentials_exception
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        if request.headers.get("X-Requested-With") != "XMLHttpRequest":
+            raise HTTPException(status_code=403, detail="Missing CSRF protection header")
     try:
         payload = jwt.decode(token, config.JWT_SECRET_KEY, algorithms=[config.ALGORITHM])
         username: str = payload.get("sub")
@@ -87,7 +191,7 @@ def dashboard_summary(current_admin: str = Depends(verify_admin)):
         with get_db_cursor() as (conn, cursor):
             table = config.DB_TABLE_NAME
             # --- 基礎 KPI ---
-            cursor.execute(f"""
+            cursor.execute(pg_sql.SQL("""
                 SELECT
                     COUNT(*) AS today_queries,
                     COUNT(DISTINCT user_id) AS unique_users,
@@ -95,9 +199,9 @@ def dashboard_summary(current_admin: str = Depends(verify_admin)):
                     COALESCE(SUM(total_tokens), 0) AS total_tokens,
                     COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
                     COALESCE(SUM(completion_tokens), 0) AS completion_tokens
-                FROM {table}
+                FROM {}
                 WHERE timestamp::date = CURRENT_DATE;
-            """)
+            """).format(pg_sql.Identifier(table)))
             row = cursor.fetchone()
             today_queries = row[0] or 0
             unique_users = row[1] or 0
@@ -107,29 +211,29 @@ def dashboard_summary(current_admin: str = Depends(verify_admin)):
             completion_tokens = int(row[5] or 0)
 
             # --- 滿意度 ---
-            cursor.execute(f"""
+            cursor.execute(pg_sql.SQL("""
                 SELECT
                     COUNT(*) FILTER (WHERE feedback_type = 'like') AS likes,
                     COUNT(*) FILTER (WHERE feedback_type IS NOT NULL AND feedback_type != '') AS total_feedback
-                FROM {table}
+                FROM {}
                 WHERE timestamp::date = CURRENT_DATE;
-            """)
+            """).format(pg_sql.Identifier(table)))
             fb = cursor.fetchone()
             likes = fb[0] or 0
             total_feedback = fb[1] or 0
             satisfaction = round(likes / total_feedback, 2) if total_feedback > 0 else None
 
             # --- Peak RPM (今日每分鐘最高請求數) ---
-            cursor.execute(f"""
+            cursor.execute(pg_sql.SQL("""
                 SELECT
                     COUNT(*) AS cnt,
                     date_trunc('minute', timestamp) AS minute_bucket
-                FROM {table}
+                FROM {}
                 WHERE timestamp::date = CURRENT_DATE
                 GROUP BY minute_bucket
                 ORDER BY cnt DESC
                 LIMIT 1;
-            """)
+            """).format(pg_sql.Identifier(table)))
             peak_row = cursor.fetchone()
             peak_rpm = int(peak_row[0]) if peak_row else 0
             peak_rpm_time = peak_row[1].strftime("%H:%M") if peak_row else None
@@ -179,18 +283,18 @@ def dashboard_trends(
     try:
         with get_db_cursor() as (conn, cursor):
             table = config.DB_TABLE_NAME
-            cursor.execute(f"""
+            cursor.execute(pg_sql.SQL("""
                 SELECT
                     timestamp::date AS day,
                     COUNT(*) AS queries,
                     COALESCE(SUM(total_tokens), 0) AS tokens,
                     COUNT(DISTINCT user_id) AS unique_users,
                     COALESCE(AVG(latency_ms), 0) AS avg_latency
-                FROM {table}
+                FROM {}
                 WHERE timestamp::date >= %s AND timestamp::date <= %s
                 GROUP BY day
                 ORDER BY day;
-            """, (d_start.isoformat(), d_end.isoformat()))
+            """).format(pg_sql.Identifier(table)), (d_start.isoformat(), d_end.isoformat()))
             rows = cursor.fetchall()
             labels = [r[0].strftime("%m/%d") for r in rows]
             queries = [r[1] for r in rows]
@@ -221,12 +325,12 @@ def dashboard_recent(limit: int = 20, current_admin: str = Depends(verify_admin)
     try:
         with get_db_cursor() as (conn, cursor):
             table = config.DB_TABLE_NAME
-            cursor.execute(f"""
+            cursor.execute(pg_sql.SQL("""
                 SELECT id, timestamp, question, answer, latency_ms, total_tokens, feedback_type
-                FROM {table}
+                FROM {}
                 ORDER BY timestamp DESC
                 LIMIT %s;
-            """, (limit,))
+            """).format(pg_sql.Identifier(table)), (limit,))
             rows = cursor.fetchall()
             result = []
             for r in rows:
@@ -248,7 +352,7 @@ def dashboard_recent(limit: int = 20, current_admin: str = Depends(verify_admin)
 
 @router.post("/login")
 @limiter.limit("5/minute")  # [SEC-4] 防止暴力破解，每個 IP 每分鐘最多嘗試 5 次
-async def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
+async def login(request: Request, response: Response, form_data: OAuth2PasswordRequestForm = Depends()):
     if form_data.username != config.ADMIN_USERNAME:
         raise HTTPException(
             status_code=401,
@@ -282,40 +386,106 @@ async def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends
     )
     
     refresh_token_expires = timedelta(days=config.REFRESH_TOKEN_EXPIRE_DAYS)
-    refresh_token = create_access_token(
-        data={"sub": config.ADMIN_USERNAME}, expires_delta=refresh_token_expires, token_type="refresh"
-    )
+    refresh_token = _issue_refresh_token(config.ADMIN_USERNAME, refresh_token_expires)
+    _set_auth_cookies(response, access_token, refresh_token)
     return {
-        "access_token": access_token,
-        "refresh_token": refresh_token,
+        "status": "success",
         "token_type": "bearer"
     }
 
 class RefreshTokenRequest(BaseModel):
-    refresh_token: str
+    refresh_token: str | None = None
 
 @router.post("/refresh")
 @limiter.limit("10/minute")
-async def refresh_token(request: Request, refresh_request: RefreshTokenRequest):
+async def refresh_token(request: Request, response: Response, refresh_request: RefreshTokenRequest | None = None):
     credentials_exception = HTTPException(
         status_code=401,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    if request.headers.get("X-Requested-With") != "XMLHttpRequest":
+        raise HTTPException(status_code=403, detail="Missing CSRF protection header")
+    refresh_token_value = (
+        refresh_request.refresh_token
+        if refresh_request and refresh_request.refresh_token
+        else request.cookies.get(ADMIN_REFRESH_COOKIE_NAME)
+    )
+    if not refresh_token_value:
+        raise credentials_exception
     try:
-        payload = jwt.decode(refresh_request.refresh_token, config.JWT_SECRET_KEY, algorithms=[config.ALGORITHM])
+        payload = jwt.decode(refresh_token_value, config.JWT_SECRET_KEY, algorithms=[config.ALGORITHM])
         username: str = payload.get("sub")
         token_type: str = payload.get("type")
-        if username is None or username != config.ADMIN_USERNAME or token_type != "refresh":
+        jti: str = payload.get("jti")
+        if username is None or username != config.ADMIN_USERNAME or token_type != "refresh" or not jti:
             raise credentials_exception
+
+        _ensure_auth_tables()
+        token_hash = _hash_token(refresh_token_value)
+        with get_db_cursor(commit=True) as (conn, cursor):
+            cursor.execute(
+                """
+                UPDATE admin_refresh_tokens
+                SET revoked_at = CURRENT_TIMESTAMP
+                WHERE jti = %s
+                  AND token_hash = %s
+                  AND subject = %s
+                  AND revoked_at IS NULL
+                  AND expires_at > CURRENT_TIMESTAMP
+                RETURNING jti;
+                """,
+                (jti, token_hash, username),
+            )
+            if cursor.fetchone() is None:
+                raise credentials_exception
             
         access_token_expires = timedelta(minutes=config.ACCESS_TOKEN_EXPIRE_MINUTES)
         access_token = create_access_token(
             data={"sub": config.ADMIN_USERNAME}, expires_delta=access_token_expires, token_type="access"
         )
-        return {"access_token": access_token, "token_type": "bearer"}
+        refresh_token_expires = timedelta(days=config.REFRESH_TOKEN_EXPIRE_DAYS)
+        new_refresh_token = _issue_refresh_token(config.ADMIN_USERNAME, refresh_token_expires)
+        _set_auth_cookies(response, access_token, new_refresh_token)
+        return {"status": "success", "token_type": "bearer"}
     except jwt.InvalidTokenError:
         raise credentials_exception
+
+@router.post("/logout")
+async def logout(response: Response, request: Request, refresh_request: RefreshTokenRequest | None = None, current_admin: str = Depends(verify_admin)):
+    try:
+        refresh_token_value = (
+            refresh_request.refresh_token
+            if refresh_request and refresh_request.refresh_token
+            else request.cookies.get(ADMIN_REFRESH_COOKIE_NAME)
+        )
+        if not refresh_token_value:
+            _clear_auth_cookies(response)
+            return {"status": "success"}
+        payload = jwt.decode(refresh_token_value, config.JWT_SECRET_KEY, algorithms=[config.ALGORITHM])
+        jti = payload.get("jti")
+        token_type = payload.get("type")
+        username = payload.get("sub")
+        if jti and token_type == "refresh" and username == current_admin:
+            _ensure_auth_tables()
+            with get_db_cursor(commit=True) as (conn, cursor):
+                cursor.execute(
+                    """
+                    UPDATE admin_refresh_tokens
+                    SET revoked_at = CURRENT_TIMESTAMP
+                    WHERE jti = %s AND subject = %s AND revoked_at IS NULL;
+                    """,
+                    (jti, current_admin),
+                )
+    except jwt.InvalidTokenError:
+        pass
+    _clear_auth_cookies(response)
+    return {"status": "success"}
+
+
+@router.get("/me")
+def admin_me(current_admin: str = Depends(verify_admin)):
+    return {"status": "success", "username": current_admin}
 
 def _parse_json_array(value):
     """Safely parse a JSON string into a list. Returns [] on failure."""
@@ -345,7 +515,7 @@ def validate_scholarship_code(scholarship_code: str) -> str:
 def list_scholarships(current_admin: str = Depends(verify_admin)):
     try:
         with get_db_cursor() as (conn, cursor):
-            cursor.execute("SELECT scholarship_code, title, link, category, created_at, education_system, tags, identity, needs_review FROM scholarships ORDER BY created_at DESC;")
+            cursor.execute("SELECT scholarship_code, title, link, category, created_at, education_system, tags, identity, needs_review, registered_residence, nationality FROM tcuscholarships ORDER BY created_at DESC;")
             rows = cursor.fetchall()
             
             result = []
@@ -360,6 +530,8 @@ def list_scholarships(current_admin: str = Depends(verify_admin)):
                     "tags": _parse_json_array(row[6]),
                     "identity": _parse_json_array(row[7]),
                     "needs_review": bool(row[8]) if row[8] is not None else False,
+                    "registered_residence": _parse_json_array(row[9]),
+                    "nationality": _parse_json_array(row[10]),
                 })
             return {"status": "success", "data": result}
     except Exception as e:
@@ -371,7 +543,7 @@ def get_scholarship(scholarship_code: str, current_admin: str = Depends(verify_a
     scholarship_code = validate_scholarship_code(scholarship_code)  # [SEC-2]
     try:
         with get_db_cursor() as (conn, cursor):
-            cursor.execute("SELECT scholarship_code, title, link, category, education_system, tags, identity, amount_summary, description, application_date_text, contact, markdown_content, needs_review, pending_data FROM scholarships WHERE scholarship_code = %s;", (scholarship_code,))
+            cursor.execute("SELECT scholarship_code, title, link, category, education_system, tags, identity, amount_summary, description, application_date_text, contact, markdown_content, needs_review, pending_data, registered_residence, nationality FROM tcuscholarships WHERE scholarship_code = %s;", (scholarship_code,))
             row = cursor.fetchone()
             
             if not row:
@@ -392,6 +564,8 @@ def get_scholarship(scholarship_code: str, current_admin: str = Depends(verify_a
                 "markdown_content": row[11],
                 "needs_review": bool(row[12]) if row[12] is not None else False,
                 "pending_data": row[13] if row[13] is not None else None,
+                "registered_residence": _parse_json_array(row[14]),
+                "nationality": _parse_json_array(row[15]),
             }
             return {"status": "success", "data": data}
     except HTTPException:
@@ -407,7 +581,7 @@ def discard_pending(scholarship_code: str, current_admin: str = Depends(verify_a
     try:
         with get_db_cursor(commit=True) as (conn, cursor):
             cursor.execute(
-                "UPDATE scholarships SET needs_review = FALSE, pending_data = NULL WHERE scholarship_code = %s",
+                "UPDATE tcuscholarships SET needs_review = FALSE, pending_data = NULL WHERE scholarship_code = %s",
                 (scholarship_code,)
             )
         return {"status": "success", "message": "Pending changes discarded"}
@@ -423,14 +597,14 @@ def extract_scholarship_info(request: ExtractRequest, current_admin: str = Depen
     content_to_process = ""
     
     if request.url:
-        if not is_safe_url(request.url):
-            raise HTTPException(status_code=400, detail="The provided URL is not safe to scrape (disallowed IP/domain).")
         try:
-            resp = requests.get(request.url, timeout=10)
-            soup = BeautifulSoup(resp.content, "html.parser")
+            fetched_text = safe_fetch_text(request.url, timeout=10)
+            soup = BeautifulSoup(fetched_text, "html.parser")
             # Extract basic text
             content_to_process = soup.get_text(separator="\n", strip=True)
             content_to_process = f"URL: {request.url}\n\nContent:\n{content_to_process}"
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Failed to load URL: {e}")
     else:
@@ -462,16 +636,17 @@ def extract_scholarship_info(request: ExtractRequest, current_admin: str = Depen
 
 @router.post("/scholarships")
 def save_scholarship(form: ScholarshipForm, current_admin: str = Depends(verify_admin)):
+    validate_scholarship_code(form.scholarship_code)  # [SEC-2]
     # 1. Save to PostgreSQL
     try:
         new_hash, current_time = _get_hash_if_url(form.link)
         
         insert_query = """
-        INSERT INTO scholarships (
+        INSERT INTO tcuscholarships (
             scholarship_code, title, link, category, education_system, tags, identity,
             amount_summary, description, application_date_text, contact, markdown_content,
-            content_hash, last_checked_at
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            content_hash, last_checked_at, registered_residence, nationality
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (scholarship_code) DO UPDATE SET
             title = EXCLUDED.title,
             link = EXCLUDED.link,
@@ -479,6 +654,8 @@ def save_scholarship(form: ScholarshipForm, current_admin: str = Depends(verify_
             education_system = EXCLUDED.education_system,
             tags = EXCLUDED.tags,
             identity = EXCLUDED.identity,
+            registered_residence = EXCLUDED.registered_residence,
+            nationality = EXCLUDED.nationality,
             amount_summary = EXCLUDED.amount_summary,
             description = EXCLUDED.description,
             application_date_text = EXCLUDED.application_date_text,
@@ -495,7 +672,9 @@ def save_scholarship(form: ScholarshipForm, current_admin: str = Depends(verify_
                 json.dumps(form.tags, ensure_ascii=False),
                 json.dumps(form.identity, ensure_ascii=False),
                 form.amount_summary, form.description, form.application_date_text,
-                form.contact, form.markdown_content, new_hash, current_time
+                form.contact, form.markdown_content, new_hash, current_time,
+                json.dumps(form.registered_residence, ensure_ascii=False),
+                json.dumps(form.nationality, ensure_ascii=False)
             ))
     except Exception as e:
         logger.error(f"[Admin API] DB error: {e}", exc_info=True)
@@ -510,7 +689,8 @@ def save_scholarship(form: ScholarshipForm, current_admin: str = Depends(verify_
             form.markdown_content, form.title,
             form.scholarship_code, form.link or "",
             form.identity, form.education_system,
-            form.category, form.tags
+            form.category, form.tags,
+            form.registered_residence, form.nationality
         )
         return {"status": "success", "message": f"Saved {count} chunks to Knowledge Base"}
     except Exception as e:
@@ -524,20 +704,25 @@ def update_scholarship(scholarship_code: str, form: ScholarshipForm, current_adm
     # 1. Update PostgreSQL (also clear pending review state)
     try:
         new_hash, current_time = _get_hash_if_url(form.link)
+        
         update_query = """
-        UPDATE scholarships SET
+        UPDATE tcuscholarships SET
             title = %s, link = %s, category = %s, education_system = %s, tags = %s, identity = %s,
+            registered_residence = %s, nationality = %s,
             amount_summary = %s, description = %s, application_date_text = %s, contact = %s,
             markdown_content = %s, content_hash = %s, last_checked_at = %s,
             needs_review = FALSE, pending_data = NULL
         WHERE scholarship_code = %s;
         """
+        
         with get_db_cursor(commit=True) as (conn, cursor):
             cursor.execute(update_query, (
                 form.title, form.link, form.category,
                 json.dumps(form.education_system, ensure_ascii=False),
                 json.dumps(form.tags, ensure_ascii=False),
                 json.dumps(form.identity, ensure_ascii=False),
+                json.dumps(form.registered_residence, ensure_ascii=False),
+                json.dumps(form.nationality, ensure_ascii=False),
                 form.amount_summary, form.description,
                 form.application_date_text, form.contact, form.markdown_content,
                 new_hash, current_time, scholarship_code
@@ -558,7 +743,8 @@ def update_scholarship(scholarship_code: str, form: ScholarshipForm, current_adm
             form.markdown_content, form.title,
             scholarship_code, form.link or "",
             form.identity, form.education_system,
-            form.category, form.tags
+            form.category, form.tags,
+            form.registered_residence, form.nationality
         )
         return {"status": "success", "message": f"Updated {count} chunks in Knowledge Base"}
     except Exception as e:
@@ -590,7 +776,7 @@ def delete_scholarship(scholarship_code: str, current_admin: str = Depends(verif
     # 2. Milvus 刪除成功後，再刪 PostgreSQL
     try:
         with get_db_cursor(commit=True) as (conn, cursor):
-            cursor.execute("DELETE FROM scholarships WHERE scholarship_code = %s", (scholarship_code,))
+            cursor.execute("DELETE FROM tcuscholarships WHERE scholarship_code = %s", (scholarship_code,))
         return {"status": "success", "message": "Successfully deleted from Knowledge Base and DB"}
     except Exception as e:
         logger.error(f"[Admin API] delete_scholarship DB error: {e}", exc_info=True)

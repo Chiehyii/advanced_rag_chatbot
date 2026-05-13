@@ -11,7 +11,6 @@ load_dotenv()
 # --- OpenAI ---
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL_NAME = os.getenv("OPENAI_MODEL_NAME", "gpt-4.1-mini")
-OPENAI_MODEL_NAME_REASONING = os.getenv("OPENAI_MODEL_NAME_REASONING", "gpt-5-mini")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
 
 # --- Authentication & Security ---
@@ -28,7 +27,7 @@ REFRESH_TOKEN_EXPIRE_DAYS = 7 # 7 days
 # --- Zilliz / Milvus ---
 ZILLIZ_API_KEY = os.getenv("ZILLIZ_API_KEY")
 CLUSTER_ENDPOINT = os.getenv("CLUSTER_ENDPOINT")
-MILVUS_COLLECTION = os.getenv("MILVUS_COLLECTION", "rag6_scholarships_hybrid")
+MILVUS_COLLECTION = os.getenv("MILVUS_COLLECTION", "tcuscholarships_milvus")
 
 # --- PostgreSQL Database ---
 DB_TABLE_NAME = os.getenv("DB_TABLE_NAME", "qa_logs2")
@@ -46,11 +45,15 @@ RATE_LIMIT_FEEDBACK = os.getenv("RATE_LIMIT_FEEDBACK", "20/minute")
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_USER_ID = os.getenv("LINE_USER_ID")
 
+# --- Environment ---
+ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
+TRUST_PROXY_HEADERS = os.getenv("TRUST_PROXY_HEADERS", "false").lower() == "true"
+MAX_REQUEST_BODY_BYTES = int(os.getenv("MAX_REQUEST_BODY_BYTES", str(1 * 1024 * 1024)))
+
 # --- CORS ---
-# 從環境變數讀取允許的來源，預設為本地開發常用的來源
-CORS_ALLOWED_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000,https://tcu-scholarships-chatbot.onrender.com/")
-# 將字串轉換為列表
-ALLOWED_ORIGINS_LIST = [origin.strip() for origin in CORS_ALLOWED_ORIGINS.split(',')]
+CORS_ALLOWED_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000,https://tcu-scholarships-chatbot.onrender.com")
+# Strip trailing slashes — mismatched origins (e.g. "https://example.com/") silently break CORS
+ALLOWED_ORIGINS_LIST = [origin.strip().rstrip('/') for origin in CORS_ALLOWED_ORIGINS.split(',') if origin.strip()]
 
 # 簡單檢查以確保關鍵環境變數已設定
 if not OPENAI_API_KEY or not ZILLIZ_API_KEY or not CLUSTER_ENDPOINT:

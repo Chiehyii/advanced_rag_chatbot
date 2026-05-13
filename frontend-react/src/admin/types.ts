@@ -6,6 +6,8 @@ export interface Scholarship {
     education_system?: string[];
     tags?: string[];
     identity?: string[];
+    registered_residence?: string[];
+    nationality?: string[];
     amount_summary?: string;
     description?: string;
     application_date_text?: string;
@@ -16,8 +18,11 @@ export interface Scholarship {
     pending_data?: Scholarship | null;
 }
 export interface MetadataSchema {
+    category: string[];
     education_system: string[];
     tags: string[];
     identity: string[];
+    registered_residence: string[];
+    nationality: string[];
 }
 export type AdminMode = 'CREATE' | 'UPDATE';

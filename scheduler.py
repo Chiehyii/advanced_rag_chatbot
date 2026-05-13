@@ -1,14 +1,14 @@
 import hashlib
 import json
 import asyncio
-import aiohttp
+import os
 from bs4 import BeautifulSoup
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from datetime import datetime, timezone
 import config
 from db import get_db_cursor
-from utils import is_safe_url
+from utils import FetchSSLError, UnsafeUrlError, safe_fetch_text_async
 from logger import get_logger
 from notifier import send_line_message
 from prompts import PROMPTS
@@ -18,19 +18,27 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 logger = get_logger(__name__)
 
+EXTRACTION_MAX_COMPLETION_TOKENS = int(os.getenv("EXTRACTION_MAX_COMPLETION_TOKENS", "4000"))
+EXTRACTION_RETRY_MAX_COMPLETION_TOKENS = int(os.getenv("EXTRACTION_RETRY_MAX_COMPLETION_TOKENS", "6000"))
+
 
 def compute_md5(text: str) -> str:
     return hashlib.md5(text.encode('utf-8')).hexdigest()
 
-async def _fetch_url_text(session: aiohttp.ClientSession, url: str) -> str:
-    if not is_safe_url(url):
-        logger.warning(f"[Scheduler] Unsafe URL blocked: {url}")
-        return ""
+async def _fetch_url_text(url: str) -> str:
     try:
-        async with session.get(url, timeout=15) as resp:
-            content = await resp.read()
-            soup = BeautifulSoup(content, "html.parser")
-            return soup.get_text(separator="\n", strip=True)
+        content = await safe_fetch_text_async(url, timeout=15)
+        soup = BeautifulSoup(content, "html.parser")
+        return soup.get_text(separator="\n", strip=True)
+    except UnsafeUrlError as e:
+        logger.warning(f"[Scheduler] Unsafe URL blocked: {url} ({e})")
+        return ""
+    except FetchSSLError as e:
+        logger.warning(f"[Scheduler] SSL verification failed: {url} ({e})")
+        return ""
+    except ValueError as e:
+        logger.warning(f"[Scheduler] Fetch rejected: {url} ({e})")
+        return ""
     except Exception as e:
         logger.warning(f"[Scheduler] Failed to scrape {url}: {type(e).__name__} - {e}")
         try:
@@ -46,16 +54,15 @@ async def _async_run_inspection(rows):
     # 限制最大並發數為 10
     sem = asyncio.Semaphore(10)
     
-    async def fetch_row(session, row):
+    async def fetch_row(row):
         scholarship_code, title, url, old_hash = row
         async with sem:
-            latest_text = await _fetch_url_text(session, url)
+            latest_text = await _fetch_url_text(url)
         return row, latest_text
     
-    async with aiohttp.ClientSession() as session:
-        tasks = [fetch_row(session, row) for row in rows]
-        # 並發執行，某個失敗不會中斷全域
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+    tasks = [fetch_row(row) for row in rows]
+    # 並發執行，某個失敗不會中斷全域
+    results = await asyncio.gather(*tasks, return_exceptions=True)
         
     for res in results:
         if isinstance(res, Exception):
@@ -65,24 +72,93 @@ async def _async_run_inspection(rows):
             
     return scraped_results
 
+def _parse_extraction_json(raw_content: str, url: str, finish_reason: str | None, attempt: int) -> dict:
+    try:
+        parsed = json.loads(raw_content)
+    except json.JSONDecodeError as e:
+        logger.warning(
+            "[Scheduler] AI extraction returned invalid JSON for %s "
+            "(attempt=%s, finish_reason=%s, chars=%s): %s",
+            url,
+            attempt,
+            finish_reason,
+            len(raw_content or ""),
+            e,
+        )
+        return {}
+
+    if not isinstance(parsed, dict):
+        logger.warning(f"[Scheduler] AI extraction returned non-object JSON for {url}: {type(parsed).__name__}")
+        return {}
+    return parsed
+
+
+def _call_extraction_model(messages: list[dict], max_completion_tokens: int):
+    response = openai_client.chat.completions.create(
+        model=config.OPENAI_MODEL_NAME,
+        messages=messages,
+        max_completion_tokens=max_completion_tokens,
+        # reasoning_effort="minimal",
+        response_format={"type": "json_object"},
+    )
+    choice = response.choices[0]
+    return choice.message.content or "", getattr(choice, "finish_reason", None)
+
+
 def ask_ai_to_extract(url: str, content: str) -> dict:
     system_prompt = PROMPTS['zh']['extraction_system']
-    try:
-        safe_content = content[:8000] if content else ""
-        response = openai_client.chat.completions.create(
-            model=config.OPENAI_MODEL_NAME,
-            messages=[
+    safe_content = content[:8000] if content else ""
+    base_user_prompt = (
+        f"URL: {url}\n\n"
+        "請只回傳一個合法 JSON object，不要使用 Markdown code block。"
+        "所有字串內的換行必須正確跳脫，markdown_content 請控制在 4000 字以內。\n\n"
+        "Content:\n"
+        + safe_content
+    )
+
+    attempts = [
+        (
+            [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"URL: {url}\n\nContent:\n" + safe_content}
+                {"role": "user", "content": base_user_prompt},
             ],
-            max_completion_tokens=1000,
-            # reasoning_effort="minimal",
-            response_format={ "type": "json_object" }
-        )
-        return json.loads(response.choices[0].message.content)
-    except Exception as e:
-        logger.error(f"[Scheduler] AI Extraction failed for {url}: {e}", exc_info=True)
-        return {}
+            EXTRACTION_MAX_COMPLETION_TOKENS,
+        ),
+        (
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        system_prompt
+                        + "\n\n你正在修正前一次輸出。請輸出壓縮、完整、可被 json.loads 解析的 JSON object。"
+                        "不要輸出說明文字。markdown_content 請摘要化並限制在 2500 字以內。"
+                    ),
+                },
+                {"role": "user", "content": base_user_prompt},
+            ],
+            EXTRACTION_RETRY_MAX_COMPLETION_TOKENS,
+        ),
+    ]
+
+    for attempt_number, (messages, max_tokens) in enumerate(attempts, start=1):
+        try:
+            raw_content, finish_reason = _call_extraction_model(messages, max_tokens)
+        except Exception as e:
+            logger.error(f"[Scheduler] AI Extraction request failed for {url}: {e}", exc_info=True)
+            return {}
+
+        if finish_reason == "length":
+            logger.warning(
+                f"[Scheduler] AI extraction output may be truncated for {url} "
+                f"(attempt={attempt_number}, max_completion_tokens={max_tokens})."
+            )
+
+        parsed = _parse_extraction_json(raw_content, url, finish_reason, attempt_number)
+        if parsed:
+            return parsed
+
+    logger.error(f"[Scheduler] AI Extraction failed for {url}: model did not return valid JSON after retry.")
+    return {}
 
 def process_scholarship_update(row, new_hash, new_text):
     """
@@ -115,7 +191,7 @@ def process_scholarship_update(row, new_hash, new_text):
         with get_db_cursor(commit=True) as (conn, cursor):
             cursor.execute(
                 """
-                UPDATE scholarships
+                UPDATE tcuscholarships
                 SET pending_data = %s, needs_review = TRUE, last_checked_at = %s
                 WHERE scholarship_code = %s
                 """,
@@ -136,7 +212,7 @@ def run_inspection():
     logger.info(f"\n[Scheduler] Running scholarship inspection at {datetime.now().isoformat()}")
     try:
         with get_db_cursor() as (conn, cursor):
-            cursor.execute("SELECT scholarship_code, title, link, content_hash FROM scholarships WHERE link IS NOT NULL AND link != '';")
+            cursor.execute("SELECT scholarship_code, title, link, content_hash FROM tcuscholarships WHERE link IS NOT NULL AND link != '';")
             rows = cursor.fetchall()
     except Exception as e:
         logger.error(f"[Scheduler] Inspection failed to fetch rows: {e}", exc_info=True)
@@ -170,7 +246,7 @@ def run_inspection():
             try:
                 with get_db_cursor(commit=True) as (update_conn, c2):
                     now = datetime.now(timezone.utc)
-                    c2.execute("UPDATE scholarships SET last_checked_at = %s WHERE scholarship_code = %s", (now.isoformat(), scholarship_code))
+                    c2.execute("UPDATE tcuscholarships SET last_checked_at = %s WHERE scholarship_code = %s", (now.isoformat(), scholarship_code))
             except Exception as e:
                 logger.warning(f"Failed to update last_checked for {title}: {e}")
     

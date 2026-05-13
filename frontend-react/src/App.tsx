@@ -12,19 +12,11 @@ import './index.css';
 
 const AdminApp = React.lazy(() => import('./admin/AdminApp').then(module => ({ default: module.AdminApp })));
 const CHAT_STORAGE_KEY = 'tcu_scholarship_chat_history';
-const SESSION_ID_KEY = 'tcu_session_id';
-const USER_ID_KEY = 'tcu_user_id';
+const CHAT_SESSION_TOKEN_KEY = 'tcu_chat_session_token';
 const API_BASE_URL = import.meta.env.VITE_API_URL || '';
+const MAX_HISTORY_MESSAGES = 20;
+const MAX_HISTORY_CONTENT_LENGTH = 2000;
 
-/** 從指定的 Storage 中取得或產生一個新的 UUID */
-function getOrCreateId(storage: Storage, key: string): string {
-  let id = storage.getItem(key);
-  if (!id) {
-    id = crypto.randomUUID();
-    storage.setItem(key, id);
-  }
-  return id;
-}
 // --- i18n Dictionaries ---
 export const translations = {
   zh: {
@@ -180,8 +172,8 @@ function App() {
     }
   }, [theme]);
   // --- 追蹤 ID ---
-  const sessionId = useRef(getOrCreateId(sessionStorage, SESSION_ID_KEY)).current;
-  const userId = useRef(getOrCreateId(localStorage, USER_ID_KEY)).current;
+  const chatSessionTokenRef = useRef(sessionStorage.getItem(CHAT_SESSION_TOKEN_KEY) || '');
+  const resetServerSessionRef = useRef(false);
   // [PERF-4] RAF handle 用於批次更新串流內容，避免每個 token 就觸發一次 re-render
   const rafRef = useRef<number | null>(null);
   const fullAnswerRef = useRef<string>(''); // 持綌最新的 fullAnswer，供 RAF closure 使用
@@ -204,6 +196,11 @@ function App() {
     }
   }, [messages]);
   const handleSendMessage = async (text: string) => {
+    const query = text.trim();
+    if (!query || isLoading) {
+      return;
+    }
+
     // Hide prediction chips from the last bot message before responding
     setMessages(prev => {
       const updatedMessages = [...prev];
@@ -216,31 +213,48 @@ function App() {
       return updatedMessages;
     });
     // Add user message
-    const newMessage = { role: 'user', content: text } as Message;
+    const newMessage = { role: 'user', content: query } as Message;
     setMessages(prev => [...prev, newMessage]);
     setIsLoading(true);
-    // Prepare history payload for API
-    const history = messages.map(msg => ({ role: msg.role, content: msg.content }));
-    history.push({ role: 'user', content: text });
+    // Prepare a bounded history payload for API validation and request-size limits.
+    const previousHistory = messages
+      .filter(msg => !msg.isStreaming && (msg.role === 'user' || msg.role === 'assistant'))
+      .map(msg => ({
+        role: msg.role,
+        content: msg.content.trim().slice(0, MAX_HISTORY_CONTENT_LENGTH),
+      }))
+      .filter(msg => msg.content.length > 0);
+    const history = [
+      ...previousHistory.slice(-(MAX_HISTORY_MESSAGES - 1)),
+      { role: 'user' as const, content: query.slice(0, MAX_HISTORY_CONTENT_LENGTH) },
+    ];
     // Add empty placeholder for bot streaming
     setMessages(prev => [...prev, { role: 'assistant', content: '', isStreaming: true }]);
     try {
       const response = await fetch(`${API_BASE_URL}/chat`, {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          query: text,
+          query,
           history,
           lang: language,
           title_filter: selectedTags.length > 0 ? selectedTags.map(t => t.title) : null,
-          session_id: sessionId,
-          user_id: userId,
+          chat_session_token: chatSessionTokenRef.current || null,
+          reset_session: resetServerSessionRef.current,
         })
       });
+      resetServerSessionRef.current = false;
+      const nextChatSessionToken = response.headers.get('X-Chat-Session-Token');
+      if (nextChatSessionToken) {
+        chatSessionTokenRef.current = nextChatSessionToken;
+        sessionStorage.setItem(CHAT_SESSION_TOKEN_KEY, nextChatSessionToken);
+      }
       if (!response.ok) {
-        throw new Error('Network response was not ok');
+        const errorText = await response.text().catch(() => '');
+        throw new Error(`Network response was not ok (${response.status}): ${errorText}`);
       }
       if (response.body) {
         const reader = response.body.getReader();
@@ -278,6 +292,7 @@ function App() {
                           isStreaming: false,
                           contexts: finalData.contexts || [],
                           logId: finalData.log_id,
+                          feedbackToken: finalData.feedback_token,
                           chips: finalData.chips || []
                         };
                       }
@@ -293,8 +308,26 @@ function App() {
                   const parsed = JSON.parse(chunk);
                   if (parsed.type === 'content') {
                     fullAnswer += parsed.data;
+                  } else if (parsed.type === 'thinking_step') {
+                    const stepData = parsed.data;
+                    setMessages(prev => {
+                      const newMessages = [...prev];
+                      const lastIdx = newMessages.length - 1;
+                      if (newMessages[lastIdx].role === 'assistant') {
+                        const existing = newMessages[lastIdx].thinkingSteps || [];
+                        // Replace last step if it was 'running' and this is a 'done' for same concept
+                        const updated = [...existing];
+                        if (stepData.status === 'done' && updated.length > 0 && updated[updated.length - 1].status === 'running') {
+                          updated[updated.length - 1] = stepData;
+                        } else {
+                          updated.push(stepData);
+                        }
+                        newMessages[lastIdx] = { ...newMessages[lastIdx], thinkingSteps: updated };
+                      }
+                      return newMessages;
+                    });
                   }
-                } catch (e) {
+                } catch {
                   // Fallback for raw text
                   fullAnswer += chunk;
                 }
@@ -346,9 +379,12 @@ function App() {
   };
   const handleClearChat = () => {
     setMessages([]);
-    setSelectedTags([]);  // Clear tags when clearing chat
+    setSelectedTags([]);
     try {
       sessionStorage.removeItem(CHAT_STORAGE_KEY);
+      sessionStorage.removeItem(CHAT_SESSION_TOKEN_KEY);
+      chatSessionTokenRef.current = '';
+      resetServerSessionRef.current = true;
     } catch (e) {
       console.warn('Failed to clear chat history from sessionStorage:', e);
     }
@@ -363,25 +399,29 @@ function App() {
   const handleRemoveTag = (scholarshipCode: string) => {
     setSelectedTags(prev => prev.filter(t => t.scholarship_code !== scholarshipCode));
   };
-  const handleFeedback = async (logId: string, type: 'like' | 'dislike' | null) => {
+  const handleFeedback = async (logId: string, feedbackToken: string, type: 'like' | 'dislike' | null) => {
     // Send feedback to backend
     await fetch(`${API_BASE_URL}/feedback`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ log_id: logId, feedback_type: type })
+      body: JSON.stringify({ log_id: logId, feedback_token: feedbackToken, feedback_type: type })
     }).catch(err => console.error("Error sending feedback:", err));
     if (type === 'dislike') {
       setCurrentFeedbackLogId(logId);
+      sessionStorage.setItem(`feedback_token_${logId}`, feedbackToken);
       setIsFeedbackOpen(true);
     }
   };
   const handleFeedbackSubmit = async (feedbackText: string) => {
     if (!currentFeedbackLogId) return;
+    const feedbackToken = sessionStorage.getItem(`feedback_token_${currentFeedbackLogId}`);
+    if (!feedbackToken) return;
     await fetch(`${API_BASE_URL}/feedback`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         log_id: currentFeedbackLogId,
+        feedback_token: feedbackToken,
         feedback_type: 'dislike',
         feedback_text: feedbackText
       })

@@ -3,28 +3,45 @@ import sys
 import uuid
 import config
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 import asyncio
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, model_validator
 from typing import List, Optional
 import psycopg2
-import traceback
+from psycopg2 import sql as pg_sql
 import json
 import time
+import hashlib
 from fastapi.responses import StreamingResponse, JSONResponse
-from rag_service import stream_chat_pipeline
+from rag_service import stream_agent_pipeline
 import admin_api
 from scheduler import start_scheduler
 from logger import get_logger, request_id_var
 from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+from security import (
+    ANONYMOUS_USER_COOKIE_NAME,
+    RequestBodyLimitMiddleware,
+    sign_session_id,
+    verify_signed_session,
+)
 
-# 建立速率限制器（以 IP 為識別）
-limiter = Limiter(key_func=get_remote_address)
+
+def _get_real_ip(request: Request) -> str:
+    """
+    Read the real client IP safely when behind a reverse proxy.
+    Render/Nginx append the real IP as the LAST entry in X-Forwarded-For,
+    so we take the last entry instead of the first (which is client-controlled).
+    Falls back to the direct TCP connection host if the header is absent.
+    """
+    forwarded_for = request.headers.get("X-Forwarded-For", "")
+    if config.TRUST_PROXY_HEADERS and forwarded_for:
+        return forwarded_for.split(",")[-1].strip()
+    return request.client.host if request.client else "127.0.0.1"
+
+limiter = Limiter(key_func=_get_real_ip)
 
 # 簡單記憶體快取，用於 filter_scholarships (10分鐘 TTL)
 _scholarship_cache = {"data": None, "timestamp": 0}
@@ -39,19 +56,28 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from agent.graph import init_postgres_checkpointer, close_postgres_checkpointer
+    await init_postgres_checkpointer()
     start_scheduler()
     yield
+    await close_postgres_checkpointer()
 
+_is_production = config.ENVIRONMENT == "production"
 app = FastAPI(
     title="Chatbot RAG API",
     description="An API for the Milvus RAG chatbot.",
     version="1.0.0",
-    docs_url=None if getattr(config, 'ENVIRONMENT', 'production') == 'production' else '/docs',
-    redoc_url=None if getattr(config, 'ENVIRONMENT', 'production') == 'production' else '/redoc',
+    docs_url=None if _is_production else '/docs',
+    redoc_url=None if _is_production else '/redoc',
     lifespan=lifespan,
 )
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    logger.warning(f"[Validation] {request.method} {request.url.path} failed: {exc.errors()}")
+    return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
 # --- Middleware ---
 app.add_middleware(
@@ -59,17 +85,30 @@ app.add_middleware(
     allow_origins=config.ALLOWED_ORIGINS_LIST,  # Use the allowlist from config
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "Accept", "X-Request-ID"],
+    allow_headers=["Content-Type", "Authorization", "Accept", "X-Request-ID", "X-Requested-With"],
+    expose_headers=["X-Chat-Session-Token"],
+)
+app.add_middleware(RequestBodyLimitMiddleware, max_body_size=config.MAX_REQUEST_BODY_BYTES)
+
+_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; "
+    "img-src 'self' data: https://www.google.com; "
+    "font-src 'self' https://fonts.gstatic.com; "
+    "connect-src 'self'; "
+    "frame-ancestors 'none'; "
+    "base-uri 'self';"
 )
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
-    """為所有請求加入 Security Headers"""
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Content-Security-Policy"] = _CSP
     if request.url.scheme == "https":
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response
@@ -86,26 +125,71 @@ async def request_id_middleware(request: Request, call_next):
 
 # --- Pydantic Models for Request and Response ---
 
+class HistoryMessage(BaseModel):
+    role: str = Field(..., pattern='^(user|assistant)$')
+    content: str = Field(..., min_length=1, max_length=2000)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_history_message(cls, data):
+        if not isinstance(data, dict):
+            return data
+        normalized = dict(data)
+        normalized["content"] = str(normalized.get("content") or "").strip()[:2000]
+        return normalized
+
 class ChatRequest(BaseModel):
     """[OPT-3] Request model for a user's chat query — with length limits to prevent token abuse."""
-    query: str = Field(..., min_length=1, max_length=1000,
-                       description="The user's question. Max 1000 characters.")
-    history: List[dict] | None = Field(None, max_length=20,
-                                       description="Chat history. Max 20 messages.")
-    lang: Optional[str] = Field('zh', pattern='^(zh|en)$',
-                                description="Language code: 'zh' or 'en' only.")
-    title_filter: List[str] | None = Field(None, max_length=3,
-                                           description="Optional list of scholarship titles to narrow RAG search. Max 3.")
-    session_id: Optional[str] = Field(None, max_length=36,
-                                      description="Browser session ID for conversation tracking.")
-    user_id: Optional[str] = Field(None, max_length=36,
-                                   description="Anonymous browser user ID for user tracking.")
+    query: str = Field(..., min_length=1, max_length=1000)
+    history: List[HistoryMessage] | None = Field(None)
+    lang: Optional[str] = Field('zh', pattern='^(zh|en)$')
+    title_filter: List[str] | None = Field(None)
+    session_id: Optional[str] = Field(None)
+    chat_session_token: Optional[str] = Field(None)
+    user_id: Optional[str] = Field(None)
+    reset_session: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_chat_request(cls, data):
+        if not isinstance(data, dict):
+            return data
+        normalized = dict(data)
+        normalized["query"] = str(normalized.get("query") or "").strip()[:1000]
+
+        raw_history = normalized.get("history") or []
+        cleaned_history = []
+        if isinstance(raw_history, list):
+            for msg in raw_history:
+                if not isinstance(msg, dict):
+                    continue
+                role = msg.get("role")
+                content = str(msg.get("content") or "").strip()
+                if role in ("user", "assistant") and content:
+                    cleaned_history.append({"role": role, "content": content[:2000]})
+        normalized["history"] = cleaned_history[-20:] if cleaned_history else None
+
+        raw_titles = normalized.get("title_filter") or None
+        if isinstance(raw_titles, list):
+            normalized["title_filter"] = [
+                str(title).strip()[:120]
+                for title in raw_titles[:3]
+                if str(title).strip()
+            ] or None
+        else:
+            normalized["title_filter"] = None
+
+        for key in ("session_id", "chat_session_token", "user_id"):
+            value = normalized.get(key)
+            normalized[key] = str(value).strip()[:160] if value else None
+        return normalized
 
 class FeedbackRequest(BaseModel):
     """Request model for submitting feedback."""
-    log_id: int
-    feedback_type: Optional[str] = None  # "like", "dislike", or null
-    feedback_text: Optional[str] = None
+    log_id: int = Field(..., ge=1)
+    feedback_token: str = Field(..., min_length=32, max_length=128)
+    feedback_type: Optional[str] = Field(None, pattern='^(like|dislike)$')
+    feedback_text: Optional[str] = Field(None, max_length=500)
 
 # --- API Endpoints ---
 
@@ -117,17 +201,49 @@ async def health_check():
     db_status = "ok" if getattr(config, 'DB_POOL', None) else "unavailable"
     return {"status": "ok", "db": db_status}
 
+@app.post("/test", include_in_schema=False)
+async def test_endpoint(request: Request):
+    if _is_production:
+        raise HTTPException(status_code=404, detail="Not found")
+    body = await request.body()
+    return {"body_len": len(body)}
+
 @app.post("/chat")
 @limiter.limit(config.RATE_LIMIT_CHAT)
-async def chat_endpoint(request: Request, chat_request: ChatRequest):
+async def chat_endpoint(request: Request):
     """
     Receives a user query and conversation history, processes it through the RAG pipeline,
     and returns a streaming response of the generated answer.
     """
-    # 取出 Middleware 注入的 request_id，以及前端傳入的 session_id / user_id
+    raw_body = await request.body()
+    if not raw_body.strip():
+        logger.warning("[Chat] Empty request body")
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object")
+
+    try:
+        payload = json.loads(raw_body)
+    except json.JSONDecodeError as e:
+        preview = raw_body[:200].decode("utf-8", errors="replace")
+        logger.warning(f"[Chat] Invalid JSON request body: {e}; body_preview={preview!r}")
+        raise HTTPException(status_code=400, detail="Request body must be valid JSON")
+
+    if not isinstance(payload, dict):
+        logger.warning(f"[Chat] JSON payload must be an object, got {type(payload).__name__}")
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object")
+
+    try:
+        chat_request = ChatRequest.model_validate(payload)
+    except ValidationError as e:
+        logger.warning(f"[Chat] Invalid chat request fields: {e.errors()}")
+        raise HTTPException(status_code=422, detail=e.errors())
+
+    # request_id comes from middleware; chat session is a per-tab signed token.
+    # anonymous user id is a backend-controlled signed cookie for aggregate stats.
     rid = getattr(request.state, 'request_id', '-')
-    sid = chat_request.session_id
-    uid = chat_request.user_id
+    sid = None if chat_request.reset_session else verify_signed_session(chat_request.chat_session_token, config.JWT_SECRET_KEY)
+    sid = sid or uuid.uuid4().hex
+    anonymous_user_cookie = request.cookies.get(ANONYMOUS_USER_COOKIE_NAME)
+    uid = verify_signed_session(anonymous_user_cookie, config.JWT_SECRET_KEY) or uuid.uuid4().hex
     
     # 📝 INFO：記錄正常的請求進入
     logger.info(f"[Chat] Received new chat stream request (session={sid}, user={uid})")
@@ -138,7 +254,7 @@ async def chat_endpoint(request: Request, chat_request: ChatRequest):
         try:
             
             # 📝 INFO：記錄使用者的提問與語言
-            logger.info(f"[Chat] Processing query for stream: '{chat_request.query}' in language '{chat_request.lang}'")
+            logger.info(f"[Chat] Processing query stream (length={len(chat_request.query)}, lang={chat_request.lang})")
             
             # --- 壓力測試防護：如果是 MOCK_TEST，直接回傳模擬資料，不進 OpenAI Pipeline ---
             if getattr(config, 'ENVIRONMENT', 'production') != 'production' and chat_request.query == "MOCK_TEST":
@@ -151,7 +267,8 @@ async def chat_endpoint(request: Request, chat_request: ChatRequest):
             # ---------------------------------------------------------------------------------
 
             # The pipeline now yields events (content chunks or final data)
-            async for event in stream_chat_pipeline(chat_request.query, chat_request.history or [], chat_request.lang, title_filter=chat_request.title_filter, request_id=rid, session_id=sid, user_id=uid):
+            history_dicts = [msg.model_dump() for msg in chat_request.history] if chat_request.history else []
+            async for event in stream_agent_pipeline(chat_request.query, history_dicts, chat_request.lang, title_filter=chat_request.title_filter, request_id=rid, session_id=sid, user_id=uid):
                 event_type = event.get("type")
                 data = event.get("data")
 
@@ -159,6 +276,11 @@ async def chat_endpoint(request: Request, chat_request: ChatRequest):
                     # Send a standard message event
                     # The data is just the text chunk
                     sse_data = json.dumps({"type": "content", "data": data})
+                    yield f"data: {sse_data}\n\n"
+
+                elif event_type == "thinking_step":
+                    # Send thinking/progress step to frontend
+                    sse_data = json.dumps({"type": "thinking_step", "data": data})
                     yield f"data: {sse_data}\n\n"
                 
                 elif event_type == "final_data":
@@ -177,7 +299,18 @@ async def chat_endpoint(request: Request, chat_request: ChatRequest):
             error_message = json.dumps({"type": "error", "data": "An error occurred on the server."})
             yield f"event: error\ndata: {error_message}\n\n"
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    response = StreamingResponse(event_generator(), media_type="text/event-stream")
+    response.headers["X-Chat-Session-Token"] = sign_session_id(sid, config.JWT_SECRET_KEY)
+    if not verify_signed_session(anonymous_user_cookie, config.JWT_SECRET_KEY):
+        response.set_cookie(
+            key=ANONYMOUS_USER_COOKIE_NAME,
+            value=sign_session_id(uid, config.JWT_SECRET_KEY),
+            httponly=True,
+            secure=_is_production,
+            samesite="none" if _is_production else "lax",
+            max_age=60 * 60 * 24 * 90,
+        )
+    return response
 
 @app.post("/feedback")
 @limiter.limit(config.RATE_LIMIT_FEEDBACK)
@@ -188,7 +321,7 @@ async def feedback_endpoint(request: Request, feedback_request: FeedbackRequest)
     # 📝 INFO：記錄收到回饋
     logger.info(f"[Feedback] Received feedback for log_id: {feedback_request.log_id}")
     # Move blocking DB operations into a sync helper and run it in a thread
-    def _update_feedback(log_id: int, feedback_type: str | None, feedback_text: str | None):
+    def _update_feedback(log_id: int, feedback_token: str, feedback_type: str | None, feedback_text: str | None):
         if not config.DB_POOL:
             return False
 
@@ -198,14 +331,15 @@ async def feedback_endpoint(request: Request, feedback_request: FeedbackRequest)
         try:
             cursor = conn.cursor()
             
-            TABLE_NAME = config.DB_TABLE_NAME
-            update_query = f"""UPDATE {TABLE_NAME}
+            feedback_token_hash = hashlib.sha256(feedback_token.encode("utf-8")).hexdigest()
+            update_query = pg_sql.SQL("""UPDATE {}
                              SET feedback_type = %s, feedback_text = %s
-                             WHERE id = %s;"""
+                             WHERE id = %s
+                               AND feedback_token_hash = %s;""").format(pg_sql.Identifier(config.DB_TABLE_NAME))
 
-            cursor.execute(update_query, (feedback_type, feedback_text, log_id))
+            cursor.execute(update_query, (feedback_type, feedback_text, log_id, feedback_token_hash))
             conn.commit()
-            return True
+            return cursor.rowcount == 1
         except psycopg2.Error as e:
             # 🚨 ERROR：資料庫寫入錯誤
             logger.error(f"[DB] Database error in /feedback helper: {e}", exc_info=True)
@@ -218,10 +352,16 @@ async def feedback_endpoint(request: Request, feedback_request: FeedbackRequest)
                 config.DB_POOL.putconn(conn)
 
     # Run the DB update in a thread to avoid blocking the event loop
-    ok = await asyncio.to_thread(_update_feedback, feedback_request.log_id, feedback_request.feedback_type, feedback_request.feedback_text)
+    ok = await asyncio.to_thread(
+        _update_feedback,
+        feedback_request.log_id,
+        feedback_request.feedback_token,
+        feedback_request.feedback_type,
+        feedback_request.feedback_text,
+    )
     if not ok:
         # Use HTTPException to return proper status code
-        raise HTTPException(status_code=500, detail="Failed to record feedback")
+        raise HTTPException(status_code=403, detail="Invalid feedback token")
 
     # 📝 INFO：記錄成功更新回饋
     logger.info(f"[Feedback] Successfully updated feedback for log_id: {feedback_request.log_id}")

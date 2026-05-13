@@ -1,122 +1,253 @@
 import React, { useState } from 'react';
-import { Message, Language } from '../types';
 import { marked } from 'marked';
-import DOMPurify from 'dompurify';
-import { ThumbsUp, ThumbsDown, Globe, ChevronDown, ChevronRight, BookOpen } from 'lucide-react';
+import { BookOpen, ChevronDown, ChevronRight, Globe, Loader2, ThumbsDown, ThumbsUp } from 'lucide-react';
+import { Language, Message } from '../types';
 import { translations } from '../App';
 
 interface MessageBubbleProps {
   message: Message;
-  onFeedback: (logId: string, type: 'like' | 'dislike' | null) => void;
+  onFeedback: (logId: string, feedbackToken: string, type: 'like' | 'dislike' | null) => void;
   onChipClick: (text: string) => void;
   language?: Language;
 }
 
+type ContextLike = {
+  source_file?: string;
+  source_url?: string;
+};
+
 export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedback, onChipClick, language = 'zh' }) => {
-  const { role, content, contexts, logId, chips, isStreaming } = message;
+  const { role, content, contexts, logId, feedbackToken, chips, isStreaming, thinkingSteps } = message;
   const t = translations[language];
   const [feedbackState, setFeedbackState] = useState<'like' | 'dislike' | null>(null);
   const [isMobileExpanded, setIsMobileExpanded] = useState(false);
+  const [isThinkingCollapsed, setIsThinkingCollapsed] = useState(true);
 
-  // [SEC-5] 使用 URL 建構子驗證協議，防止 javascript: / data: 等惡意 URL
   const sanitizeUrl = (raw: string | undefined | null): string => {
     if (!raw || raw === '#') return '#';
     try {
       const normalized = raw.startsWith('http') ? raw : 'https://' + raw;
       const parsed = new URL(normalized);
-      // 只允許 https 和 http 協議，其他一律顯示安全的佔位符
       return ['https:', 'http:'].includes(parsed.protocol) ? parsed.href : '#';
     } catch {
-      return '#'; // URL 格式錯誤時也安全降級
+      return '#';
     }
   };
 
-  // 修改 createMarkup，讓它接收 contexts 陣列
-  const createMarkup = (text: string, ctxs: any[]) => {
-    // 1. 先把 Markdown 轉成 HTML，避免 marked 把之後注入的 HTML 標籤當文字跳脫
-    const rawHtml = marked.parse(text) as string;
+  const renderCitation = (num: string, key: string, ctxs: ContextLike[], showTooltip = true) => {
+    const idx = parseInt(num, 10) - 1;
+    const ctx = ctxs && ctxs[idx] ? ctxs[idx] : null;
+    if (!ctx) return <sup key={key} className="inline-citation">[{num}]</sup>;
 
-    // 2. 再對 HTML 字串做引用標籤替換 [1] → Tooltip 結構
-    const processedHtml = rawHtml.replace(/\[(\d+)\]/g, (match, num) => {
-      const idx = parseInt(num) - 1;
-      const ctx = ctxs && ctxs[idx] ? ctxs[idx] : null;
+    const url = sanitizeUrl(ctx.source_url);
+    const title = ctx.source_file || t.unknown_source;
+    const domain = url !== '#' ? new URL(url).hostname : '';
 
-      // 如果找不到對應的文件，就保持原樣
-      if (!ctx) return `<sup class="inline-citation">${match}</sup>`;
+    if (!showTooltip) {
+      return (
+        <a key={key} href={url} target="_blank" rel="noopener noreferrer" className="inline-citation">
+          <sup>[{num}]</sup>
+        </a>
+      );
+    }
 
-      // 取得網址、標題與內容片段
-      const url = sanitizeUrl(ctx.source_url);  // [SEC-5]
-      const title = ctx.source_file || t.unknown_source;
-      const domain = url !== '#' ? new URL(url).hostname : '';
-      // 產生 Tooltip 結構 (<a> 標籤負責點擊前往，後面的 span 是 Hover 卡片)
-      return `
-        <span class="citation-wrapper">
-          <a href="${url}" target="_blank" rel="noopener noreferrer" class="inline-citation">
-            <sup>[${num}]</sup>
-          </a>
-          <span class="citation-tooltip">
-            <span class="tooltip-title">${title}</span>
-            ${domain ? `<span class="tooltip-url">${domain}</span>` : ''}
-          </span>
+    return (
+      <span key={key} className="citation-wrapper">
+        <a href={url} target="_blank" rel="noopener noreferrer" className="inline-citation">
+          <sup>[{num}]</sup>
+        </a>
+        <span className="citation-tooltip">
+          <span className="tooltip-title">{title}</span>
+          {domain ? <span className="tooltip-url">{domain}</span> : null}
         </span>
-      `;
-    });
-
-    return {
-      __html: DOMPurify.sanitize(processedHtml, { ADD_ATTR: ['target', 'rel', 'class'] })
-    };
+      </span>
+    );
   };
 
-  const renderContexts = (visibilityClass: string) => {
-    if (!contexts || contexts.length === 0 || isStreaming) return null;
-    return (
-      <div className={`contexts ${visibilityClass} ${isMobileExpanded ? 'mobile-expanded' : 'mobile-collapsed'}`}>
-        <div className="contexts-header" onClick={() => setIsMobileExpanded(!isMobileExpanded)}>
-          <h4>{t.reference_title}</h4>
-          <span className="mobile-toggle-icon">
-            {isMobileExpanded ? <ChevronDown size={18} strokeWidth={1.5} /> : <ChevronRight size={18} strokeWidth={1.5} />}
-          </span>
-        </div>
-        <div className="context-cards-list">
-          {contexts.map((ctx, idx) => {
-            const url = sanitizeUrl(ctx.source_url);
-            const domain = url !== '#' ? new URL(url).hostname : '';
-            const displaySnippet = (ctx.text || '').replace(/<[^>]*>?/gm, '');
+  const renderInline = (text: string, keyPrefix: string, ctxs: ContextLike[], options: { showCitationTooltip?: boolean } = {}): React.ReactNode[] => {
+    const nodes: React.ReactNode[] = [];
+    const pattern = /(\[(\d+)\]|\[([^\]]+)\]\(([^)]+)\)|`([^`]+)`|\*\*([^*]+)\*\*)/g;
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
 
-            return (
-              <a
-                key={idx}
-                id={`context-card-${logId || 'temp'}-${idx + 1}`}
-                href={url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="context-card-link"
-                title={ctx.source_file || 'Unknown'}
-              >
-                <div className="context-card">
-                  <div className="context-card-title">{ctx.source_file || t.unknown_source}</div>
-                  <div className="context-card-text">{displaySnippet}</div>
-                  <div className="context-card-url" style={{ color: '#666', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    {domain ? (
-                      <img src={`https://www.google.com/s2/favicons?sz=64&domain=${encodeURIComponent(domain)}`} alt="icon" style={{ width: 16, height: 16, borderRadius: 2 }} />
-                    ) : <Globe size={16} color="#888" />}
-                    <span className="url-text">{url}</span>
-                  </div>
-                </div>
-              </a>
-            );
-          })}
-        </div>
-      </div>
-    );
+    while ((match = pattern.exec(text)) !== null) {
+      if (match.index > lastIndex) {
+        nodes.push(text.slice(lastIndex, match.index));
+      }
+
+      const key = `${keyPrefix}-${match.index}`;
+      if (match[2]) {
+        nodes.push(renderCitation(match[2], key, ctxs, options.showCitationTooltip !== false));
+      } else if (match[3] && match[4]) {
+        const url = sanitizeUrl(match[4]);
+        nodes.push(
+          <a key={key} href={url} target="_blank" rel="noopener noreferrer">
+            {match[3]}
+          </a>
+        );
+      } else if (match[5]) {
+        nodes.push(<code key={key}>{match[5]}</code>);
+      } else if (match[6]) {
+        nodes.push(<strong key={key}>{match[6]}</strong>);
+      }
+
+      lastIndex = pattern.lastIndex;
+    }
+
+    if (lastIndex < text.length) {
+      nodes.push(text.slice(lastIndex));
+    }
+
+    return nodes;
+  };
+
+  const normalizeMarkdownTables = (value: string): string => {
+    const separatorPattern = /\|(?:\s*:?-{3,}:?\s*\|)+/g;
+    const countCells = (row: string) => row.split('|').slice(1, -1).length;
+    const readRow = (line: string, start: number, cellCount: number) => {
+      let pipes = 0;
+      for (let i = start; i < line.length; i++) {
+        if (line[i] === '|') {
+          pipes += 1;
+          if (pipes === cellCount + 1) {
+            return { row: line.slice(start, i + 1).trim(), end: i + 1 };
+          }
+        }
+      }
+      return null;
+    };
+
+    return value.split('\n').map((line) => {
+      separatorPattern.lastIndex = 0;
+      const separatorMatch = separatorPattern.exec(line);
+      if (!separatorMatch) return line;
+
+      const separator = separatorMatch[0].trim();
+      const cellCount = countCells(separator);
+      if (cellCount < 2) return line;
+
+      const separatorStart = separatorMatch.index;
+      const headerCandidates: number[] = [];
+      for (let i = 0; i < separatorStart; i++) {
+        if (line[i] === '|') headerCandidates.push(i);
+      }
+
+      let headerStart: number | undefined;
+      for (let i = headerCandidates.length - 1; i >= 0; i--) {
+        const start = headerCandidates[i];
+        const candidate = readRow(line, start, cellCount);
+        if (candidate && candidate.end <= separatorStart && line.slice(candidate.end, separatorStart).trim() === '') {
+          headerStart = start;
+          break;
+        }
+      }
+      if (headerStart === undefined) return line;
+
+      const header = readRow(line, headerStart, cellCount);
+      const separatorRow = readRow(line, separatorStart, cellCount);
+      if (!header || !separatorRow) return line;
+
+      const rows: string[] = [];
+      let cursor = separatorRow.end;
+      while (cursor < line.length) {
+        while (line[cursor] === ' ' || line[cursor] === '\t') cursor += 1;
+        if (line[cursor] !== '|') break;
+
+        const row = readRow(line, cursor, cellCount);
+        if (!row) break;
+        rows.push(row.row);
+        cursor = row.end;
+      }
+
+      if (rows.length === 0) return line;
+
+      const before = line.slice(0, headerStart);
+      const after = line.slice(cursor);
+      const trailingText = after.trim() ? `\n\n${after.trimStart()}` : after;
+      return `${before}${header.row}\n${separator}\n${rows.join('\n')}${trailingText}`;
+    }).join('\n');
+  };
+
+  const getTableCellText = (cell: any): string => {
+    if (typeof cell === 'string') return cell;
+    return cell?.text || cell?.raw || '';
+  };
+
+  const renderMarkdown = (text: string, ctxs: ContextLike[]) => {
+    const tokens = marked.lexer(normalizeMarkdownTables(text), { gfm: true, breaks: true }) as any[];
+
+    return tokens.map((token, idx) => {
+      const key = `md-${idx}`;
+
+      if (token.type === 'heading') {
+        const HeadingTag = `h${Math.min(token.depth || 3, 4)}` as keyof JSX.IntrinsicElements;
+        return <HeadingTag key={key}>{renderInline(token.text || '', key, ctxs)}</HeadingTag>;
+      }
+
+      if (token.type === 'paragraph') {
+        return <p key={key}>{renderInline(token.text || '', key, ctxs)}</p>;
+      }
+
+      if (token.type === 'list') {
+        const ListTag = token.ordered ? 'ol' : 'ul';
+        return (
+          <ListTag key={key}>
+            {(token.items || []).map((item: any, itemIdx: number) => (
+              <li key={`${key}-item-${itemIdx}`}>{renderInline(item.text || '', `${key}-item-${itemIdx}`, ctxs)}</li>
+            ))}
+          </ListTag>
+        );
+      }
+
+      if (token.type === 'table') {
+        return (
+          <div key={key} className="markdown-table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  {(token.header || []).map((cell: any, cellIdx: number) => (
+                    <th key={`${key}-head-${cellIdx}`} style={{ textAlign: token.align?.[cellIdx] || undefined }}>
+                      {renderInline(getTableCellText(cell), `${key}-head-${cellIdx}`, ctxs, { showCitationTooltip: false })}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {(token.rows || []).map((row: any[], rowIdx: number) => (
+                  <tr key={`${key}-row-${rowIdx}`}>
+                    {row.map((cell: any, cellIdx: number) => (
+                      <td key={`${key}-cell-${rowIdx}-${cellIdx}`} style={{ textAlign: token.align?.[cellIdx] || undefined }}>
+                        {renderInline(getTableCellText(cell), `${key}-cell-${rowIdx}-${cellIdx}`, ctxs, { showCitationTooltip: false })}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+      }
+
+      if (token.type === 'code') {
+        return (
+          <pre key={key}>
+            <code>{token.text || ''}</code>
+          </pre>
+        );
+      }
+
+      if (token.type === 'blockquote') {
+        return <blockquote key={key}>{renderInline(token.text || '', key, ctxs)}</blockquote>;
+      }
+
+      if (token.type === 'space') return null;
+
+      return <p key={key}>{renderInline(token.raw || token.text || '', key, ctxs)}</p>;
+    });
   };
 
   if (role === 'user') {
-    return (
-      <div className="message user-message">
-        {content}
-      </div>
-    );
+    return <div className="message user-message">{content}</div>;
   }
 
   return (
@@ -124,19 +255,48 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
       <div className="bot-message-content">
         <div className="message-body">
           <div className="bot-left-col">
-            {/* 3. 記得把 onClick={handleMessageClick} 移除，並且把 contexts 傳給 createMarkup */}
-            <div
-              className={`message bot-message ${isStreaming && !content ? 'thinking' : ''}`}
-              dangerouslySetInnerHTML={content ? createMarkup(content, contexts || []) : { __html: 'Thinking...' }}
-            />
-            {logId && !isStreaming && (
+            <div className="message bot-message">
+              {thinkingSteps && thinkingSteps.length > 0 && (
+                <div className={`thinking-steps ${content ? 'collapsed' : 'expanded'}`}>
+                  {content ? (
+                    <button
+                      className="thinking-toggle"
+                      onClick={() => setIsThinkingCollapsed(!isThinkingCollapsed)}
+                    >
+                      {isThinkingCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+                      <span className="thinking-toggle-text">
+                        {thinkingSteps.filter(s => s.status === 'done').length} steps completed
+                      </span>
+                    </button>
+                  ) : null}
+                  {(!content || (content && !isThinkingCollapsed)) && (
+                    <div className="thinking-list">
+                      {thinkingSteps.map((step, idx) => (
+                        <div key={idx} className={`thinking-item thinking-${step.status}`}>
+                          {step.status === 'running' && (
+                            <span className="thinking-icon">
+                              <Loader2 size={14} className="spin" />
+                            </span>
+                          )}
+                          <span className="thinking-text">{step.step}</span>
+                          {step.detail && <span className="thinking-detail">{step.detail}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              {content && <div>{renderMarkdown(content, contexts || [])}</div>}
+            </div>
+
+            {logId && feedbackToken && !isStreaming && (
               <div className="feedback-buttons">
                 <button
                   className={`feedback-btn like-btn ${feedbackState === 'like' ? 'active' : ''}`}
                   onClick={() => {
                     const newState = feedbackState === 'like' ? null : 'like';
                     setFeedbackState(newState);
-                    onFeedback(logId, newState);
+                    onFeedback(logId, feedbackToken, newState);
                   }}
                   title="Satisfied"
                 >
@@ -147,7 +307,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
                   onClick={() => {
                     const newState = feedbackState === 'dislike' ? null : 'dislike';
                     setFeedbackState(newState);
-                    onFeedback(logId, newState);
+                    onFeedback(logId, feedbackToken, newState);
                   }}
                   title="Dissatisfied"
                 >
@@ -155,7 +315,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
                 </button>
                 {contexts && contexts.length > 0 && (
                   <button
-                    className={`feedback-btn mobile-source-toggle-btn ${isMobileExpanded ? 'active' : ''}`}
+                    className={`feedback-btn source-toggle-btn ${isMobileExpanded ? 'active' : ''}`}
                     onClick={() => setIsMobileExpanded(!isMobileExpanded)}
                     title={t.reference_title}
                   >
@@ -164,15 +324,16 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
                 )}
               </div>
             )}
+
             {isMobileExpanded && contexts && contexts.length > 0 && !isStreaming && (
-              <div className="mobile-inline-contexts">
+              <div className="inline-contexts">
                 {contexts.map((ctx, idx) => {
                   const url = sanitizeUrl(ctx.source_url);
                   const domain = url !== '#' ? new URL(url).hostname : '';
                   return (
                     <a
                       key={idx}
-                      id={`context-card-mobile-${logId || 'temp'}-${idx + 1}`}
+                      id={`context-card-${logId || 'temp'}-${idx + 1}`}
                       href={url}
                       target="_blank"
                       rel="noopener noreferrer"
@@ -193,6 +354,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
                 })}
               </div>
             )}
+
             {chips && chips.length > 0 && !isStreaming && (
               <div className="chips-container">
                 {chips.map((chip, idx) => (
@@ -203,7 +365,6 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
               </div>
             )}
           </div>
-          {renderContexts('desktop-only-contexts')}
         </div>
       </div>
     </div>

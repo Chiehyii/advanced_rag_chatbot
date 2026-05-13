@@ -5,7 +5,7 @@ import os
 # 將專案根目錄加入 PATH，以便匯入 utils.py
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from utils import is_safe_url
+from utils import is_safe_url, is_ssl_fallback_allowed
 
 def test_safe_urls():
     """測試正常外部允許的 URL"""
@@ -29,7 +29,18 @@ def test_unsafe_urls():
     # AWS Metadata IP
     assert is_safe_url("http://169.254.169.254") == False
 
+    # Non-standard ports are blocked to reduce SSRF reachability.
+    assert is_safe_url("https://www.google.com:444") == False
+    assert is_safe_url("http://example.com:8080") == False
+
 def test_invalid_urls():
     """測試畸形或無法解析的 URL"""
     assert is_safe_url("not_a_url") == False
     assert is_safe_url("") == False
+
+
+def test_ssl_fallback_allowlist_defaults():
+    assert is_ssl_fallback_allowed("https://yizhu.tcu.edu.tw/?p=2250") == True
+    assert is_ssl_fallback_allowed("https://research.tcu.edu.tw/?page_id=3500") == True
+    assert is_ssl_fallback_allowed("https://www.nstc.gov.tw/") == True
+    assert is_ssl_fallback_allowed("https://example.com/") == False
