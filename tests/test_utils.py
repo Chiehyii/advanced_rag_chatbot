@@ -29,6 +29,10 @@ def test_unsafe_urls():
     # AWS Metadata IP
     assert is_safe_url("http://169.254.169.254") == False
 
+    # Non-standard ports are blocked to reduce SSRF reachability.
+    assert is_safe_url("https://www.google.com:444") == False
+    assert is_safe_url("http://example.com:8080") == False
+
 def test_invalid_urls():
     """測試畸形或無法解析的 URL"""
     assert is_safe_url("not_a_url") == False

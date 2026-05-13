@@ -17,7 +17,6 @@ import traceback
 import json
 import time
 import hashlib
-import hmac
 from fastapi.responses import StreamingResponse, JSONResponse
 from rag_service import stream_chat_pipeline, stream_agent_pipeline
 import admin_api
@@ -25,6 +24,13 @@ from scheduler import start_scheduler
 from logger import get_logger, request_id_var
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from security import (
+    RequestBodyLimitMiddleware,
+    SESSION_COOKIE_NAME,
+    sign_session_id,
+    verify_signed_session,
+)
+
 
 def _get_real_ip(request: Request) -> str:
     """
@@ -39,33 +45,6 @@ def _get_real_ip(request: Request) -> str:
     return request.client.host if request.client else "127.0.0.1"
 
 limiter = Limiter(key_func=_get_real_ip)
-
-_SESSION_COOKIE_NAME = "chat_session"
-
-
-def _sign_session_id(session_id: str) -> str:
-    signature = hmac.new(
-        config.JWT_SECRET_KEY.encode("utf-8"),
-        session_id.encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-    return f"{session_id}.{signature}"
-
-
-def _verify_signed_session(value: str | None) -> str | None:
-    if not value or "." not in value:
-        return None
-    session_id, signature = value.rsplit(".", 1)
-    if len(session_id) != 32:
-        return None
-    expected = hmac.new(
-        config.JWT_SECRET_KEY.encode("utf-8"),
-        session_id.encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-    if hmac.compare_digest(signature, expected):
-        return session_id
-    return None
 
 # 簡單記憶體快取，用於 filter_scholarships (10分鐘 TTL)
 _scholarship_cache = {"data": None, "timestamp": 0}
@@ -111,6 +90,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "Accept", "X-Request-ID"],
 )
+app.add_middleware(RequestBodyLimitMiddleware, max_body_size=config.MAX_REQUEST_BODY_BYTES)
 
 _CSP = (
     "default-src 'self'; "
@@ -122,18 +102,6 @@ _CSP = (
     "frame-ancestors 'none'; "
     "base-uri 'self';"
 )
-
-@app.middleware("http")
-async def limit_request_body_size(request: Request, call_next):
-    content_length = request.headers.get("content-length")
-    if content_length:
-        try:
-            if int(content_length) > config.MAX_REQUEST_BODY_BYTES:
-                return JSONResponse(status_code=413, content={"detail": "Request body too large"})
-        except ValueError:
-            pass
-
-    return await call_next(request)
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
@@ -272,8 +240,8 @@ async def chat_endpoint(request: Request):
 
     # 取出 Middleware 注入的 request_id，以及前端傳入的 session_id / user_id
     rid = getattr(request.state, 'request_id', '-')
-    signed_cookie = request.cookies.get(_SESSION_COOKIE_NAME)
-    sid = None if chat_request.reset_session else _verify_signed_session(signed_cookie)
+    signed_cookie = request.cookies.get(SESSION_COOKIE_NAME)
+    sid = None if chat_request.reset_session else verify_signed_session(signed_cookie, config.JWT_SECRET_KEY)
     sid = sid or uuid.uuid4().hex
     uid = None
     
@@ -332,10 +300,10 @@ async def chat_endpoint(request: Request):
             yield f"event: error\ndata: {error_message}\n\n"
 
     response = StreamingResponse(event_generator(), media_type="text/event-stream")
-    if chat_request.reset_session or not _verify_signed_session(signed_cookie):
+    if chat_request.reset_session or not verify_signed_session(signed_cookie, config.JWT_SECRET_KEY):
         response.set_cookie(
-            key=_SESSION_COOKIE_NAME,
-            value=_sign_session_id(sid),
+            key=SESSION_COOKIE_NAME,
+            value=sign_session_id(sid, config.JWT_SECRET_KEY),
             httponly=True,
             secure=_is_production,
             samesite="none" if _is_production else "lax",

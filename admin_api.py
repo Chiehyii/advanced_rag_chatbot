@@ -8,7 +8,7 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from slowapi import Limiter
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from openai import OpenAI
 import config
 from datetime import datetime, timedelta, timezone
@@ -38,24 +38,44 @@ limiter = Limiter(key_func=_get_real_ip)
 
 # --- Models ---
 class ExtractRequest(BaseModel):
-    url: Optional[str] = None
-    text: Optional[str] = None
+    url: Optional[str] = Field(None, max_length=500)
+    text: Optional[str] = Field(None, max_length=8000)
 
 class ScholarshipForm(BaseModel):
-    scholarship_code: str
-    title: str
-    link: Optional[str] = ""
-    category: Optional[str] = ""
-    education_system: List[str] = []
-    tags: List[str] = []
-    identity: List[str] = []
-    registered_residence: List[str] = []
-    nationality: List[str] = []
-    amount_summary: Optional[str] = ""
-    description: Optional[str] = ""
-    application_date_text: Optional[str] = ""
-    contact: Optional[str] = ""
-    markdown_content: str
+    scholarship_code: str = Field(..., min_length=1, max_length=80)
+    title: str = Field(..., min_length=1, max_length=200)
+    link: Optional[str] = Field("", max_length=500)
+    category: Optional[str] = Field("", max_length=100)
+    education_system: List[str] = Field(default_factory=list, max_length=20)
+    tags: List[str] = Field(default_factory=list, max_length=30)
+    identity: List[str] = Field(default_factory=list, max_length=30)
+    registered_residence: List[str] = Field(default_factory=list, max_length=30)
+    nationality: List[str] = Field(default_factory=list, max_length=30)
+    amount_summary: Optional[str] = Field("", max_length=1000)
+    description: Optional[str] = Field("", max_length=5000)
+    application_date_text: Optional[str] = Field("", max_length=1000)
+    contact: Optional[str] = Field("", max_length=1000)
+    markdown_content: str = Field(..., min_length=1, max_length=200000)
+
+    @field_validator(
+        "education_system",
+        "tags",
+        "identity",
+        "registered_residence",
+        "nationality",
+        mode="before",
+    )
+    @classmethod
+    def normalize_short_string_list(cls, value):
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            return value
+        return [
+            str(item).strip()[:120]
+            for item in value
+            if str(item).strip()
+        ]
 
 # --- Security Setup ---
 import bcrypt
