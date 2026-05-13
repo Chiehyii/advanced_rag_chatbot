@@ -1,13 +1,14 @@
 import hashlib
 import json
 import asyncio
+import os
 from bs4 import BeautifulSoup
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from datetime import datetime, timezone
 import config
 from db import get_db_cursor
-from utils import safe_fetch_text_async
+from utils import FetchSSLError, UnsafeUrlError, safe_fetch_text_async
 from logger import get_logger
 from notifier import send_line_message
 from prompts import PROMPTS
@@ -16,6 +17,9 @@ from milvus_service import init_milvus_collection, emb_texts_batch
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 logger = get_logger(__name__)
+
+EXTRACTION_MAX_COMPLETION_TOKENS = int(os.getenv("EXTRACTION_MAX_COMPLETION_TOKENS", "4000"))
+EXTRACTION_RETRY_MAX_COMPLETION_TOKENS = int(os.getenv("EXTRACTION_RETRY_MAX_COMPLETION_TOKENS", "6000"))
 
 
 def compute_md5(text: str) -> str:
@@ -26,8 +30,14 @@ async def _fetch_url_text(url: str) -> str:
         content = await safe_fetch_text_async(url, timeout=15)
         soup = BeautifulSoup(content, "html.parser")
         return soup.get_text(separator="\n", strip=True)
-    except ValueError as e:
+    except UnsafeUrlError as e:
         logger.warning(f"[Scheduler] Unsafe URL blocked: {url} ({e})")
+        return ""
+    except FetchSSLError as e:
+        logger.warning(f"[Scheduler] SSL verification failed: {url} ({e})")
+        return ""
+    except ValueError as e:
+        logger.warning(f"[Scheduler] Fetch rejected: {url} ({e})")
         return ""
     except Exception as e:
         logger.warning(f"[Scheduler] Failed to scrape {url}: {type(e).__name__} - {e}")
@@ -62,24 +72,93 @@ async def _async_run_inspection(rows):
             
     return scraped_results
 
+def _parse_extraction_json(raw_content: str, url: str, finish_reason: str | None, attempt: int) -> dict:
+    try:
+        parsed = json.loads(raw_content)
+    except json.JSONDecodeError as e:
+        logger.warning(
+            "[Scheduler] AI extraction returned invalid JSON for %s "
+            "(attempt=%s, finish_reason=%s, chars=%s): %s",
+            url,
+            attempt,
+            finish_reason,
+            len(raw_content or ""),
+            e,
+        )
+        return {}
+
+    if not isinstance(parsed, dict):
+        logger.warning(f"[Scheduler] AI extraction returned non-object JSON for {url}: {type(parsed).__name__}")
+        return {}
+    return parsed
+
+
+def _call_extraction_model(messages: list[dict], max_completion_tokens: int):
+    response = openai_client.chat.completions.create(
+        model=config.OPENAI_MODEL_NAME,
+        messages=messages,
+        max_completion_tokens=max_completion_tokens,
+        # reasoning_effort="minimal",
+        response_format={"type": "json_object"},
+    )
+    choice = response.choices[0]
+    return choice.message.content or "", getattr(choice, "finish_reason", None)
+
+
 def ask_ai_to_extract(url: str, content: str) -> dict:
     system_prompt = PROMPTS['zh']['extraction_system']
-    try:
-        safe_content = content[:8000] if content else ""
-        response = openai_client.chat.completions.create(
-            model=config.OPENAI_MODEL_NAME,
-            messages=[
+    safe_content = content[:8000] if content else ""
+    base_user_prompt = (
+        f"URL: {url}\n\n"
+        "請只回傳一個合法 JSON object，不要使用 Markdown code block。"
+        "所有字串內的換行必須正確跳脫，markdown_content 請控制在 4000 字以內。\n\n"
+        "Content:\n"
+        + safe_content
+    )
+
+    attempts = [
+        (
+            [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"URL: {url}\n\nContent:\n" + safe_content}
+                {"role": "user", "content": base_user_prompt},
             ],
-            max_completion_tokens=1000,
-            # reasoning_effort="minimal",
-            response_format={ "type": "json_object" }
-        )
-        return json.loads(response.choices[0].message.content)
-    except Exception as e:
-        logger.error(f"[Scheduler] AI Extraction failed for {url}: {e}", exc_info=True)
-        return {}
+            EXTRACTION_MAX_COMPLETION_TOKENS,
+        ),
+        (
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        system_prompt
+                        + "\n\n你正在修正前一次輸出。請輸出壓縮、完整、可被 json.loads 解析的 JSON object。"
+                        "不要輸出說明文字。markdown_content 請摘要化並限制在 2500 字以內。"
+                    ),
+                },
+                {"role": "user", "content": base_user_prompt},
+            ],
+            EXTRACTION_RETRY_MAX_COMPLETION_TOKENS,
+        ),
+    ]
+
+    for attempt_number, (messages, max_tokens) in enumerate(attempts, start=1):
+        try:
+            raw_content, finish_reason = _call_extraction_model(messages, max_tokens)
+        except Exception as e:
+            logger.error(f"[Scheduler] AI Extraction request failed for {url}: {e}", exc_info=True)
+            return {}
+
+        if finish_reason == "length":
+            logger.warning(
+                f"[Scheduler] AI extraction output may be truncated for {url} "
+                f"(attempt={attempt_number}, max_completion_tokens={max_tokens})."
+            )
+
+        parsed = _parse_extraction_json(raw_content, url, finish_reason, attempt_number)
+        if parsed:
+            return parsed
+
+    logger.error(f"[Scheduler] AI Extraction failed for {url}: model did not return valid JSON after retry.")
+    return {}
 
 def process_scholarship_update(row, new_hash, new_text):
     """

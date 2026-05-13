@@ -1,9 +1,26 @@
 import socket
 import ipaddress
+import os
 from urllib.parse import urljoin, urlparse
 
 MAX_FETCH_BYTES = 1 * 1024 * 1024
 MAX_REDIRECTS = 3
+SSL_FALLBACK_ALLOWED_HOSTS = tuple(
+    host.strip().lower()
+    for host in os.getenv(
+        "SSL_FALLBACK_ALLOWED_HOSTS",
+        ".tcu.edu.tw,www.nstc.gov.tw",
+    ).split(",")
+    if host.strip()
+)
+
+
+class UnsafeUrlError(ValueError):
+    """Raised when a URL fails SSRF or redirect safety checks."""
+
+
+class FetchSSLError(ValueError):
+    """Raised when HTTPS certificate verification fails."""
 
 
 def _is_public_ip(ip_addr: str) -> bool:
@@ -52,10 +69,26 @@ def is_safe_url(url: str) -> bool:
         return False
 
 
+def is_ssl_fallback_allowed(url: str) -> bool:
+    """Return True only for configured public hosts allowed to retry without cert verification."""
+    hostname = (urlparse(url).hostname or "").lower()
+    if not hostname:
+        return False
+
+    for allowed_host in SSL_FALLBACK_ALLOWED_HOSTS:
+        if allowed_host.startswith("."):
+            root = allowed_host[1:]
+            if hostname == root or hostname.endswith(allowed_host):
+                return True
+        elif hostname == allowed_host:
+            return True
+    return False
+
+
 def _validate_next_url(current_url: str, location: str) -> str:
     next_url = urljoin(current_url, location)
     if not is_safe_url(next_url):
-        raise ValueError("Unsafe redirect target blocked")
+        raise UnsafeUrlError("Unsafe redirect target blocked")
     return next_url
 
 
@@ -64,31 +97,39 @@ def safe_fetch_text(url: str, timeout: int = 10, max_bytes: int = MAX_FETCH_BYTE
     import requests
 
     if not is_safe_url(url):
-        raise ValueError("Unsafe URL blocked")
+        raise UnsafeUrlError("Unsafe URL blocked")
 
-    current_url = url
-    with requests.Session() as session:
-        session.trust_env = False
-        for _ in range(MAX_REDIRECTS + 1):
-            response = session.get(current_url, timeout=timeout, allow_redirects=False, stream=True)
-            if response.is_redirect or response.is_permanent_redirect:
-                location = response.headers.get("Location")
-                if not location:
-                    raise ValueError("Redirect without Location blocked")
-                current_url = _validate_next_url(current_url, location)
-                continue
-
-            response.raise_for_status()
-            content = bytearray()
-            for chunk in response.iter_content(chunk_size=8192):
-                if not chunk:
+    def fetch_with_verify(verify: bool) -> str:
+        current_url = url
+        with requests.Session() as session:
+            session.trust_env = False
+            for _ in range(MAX_REDIRECTS + 1):
+                response = session.get(current_url, timeout=timeout, allow_redirects=False, stream=True, verify=verify)
+                if response.is_redirect or response.is_permanent_redirect:
+                    location = response.headers.get("Location")
+                    if not location:
+                        raise UnsafeUrlError("Redirect without Location blocked")
+                    current_url = _validate_next_url(current_url, location)
                     continue
-                content.extend(chunk)
-                if len(content) > max_bytes:
-                    raise ValueError("Response body too large")
-            return bytes(content).decode(response.encoding or "utf-8", errors="replace")
 
-    raise ValueError("Too many redirects")
+                response.raise_for_status()
+                content = bytearray()
+                for chunk in response.iter_content(chunk_size=8192):
+                    if not chunk:
+                        continue
+                    content.extend(chunk)
+                    if len(content) > max_bytes:
+                        raise ValueError("Response body too large")
+                return bytes(content).decode(response.encoding or "utf-8", errors="replace")
+
+        raise ValueError("Too many redirects")
+
+    try:
+        return fetch_with_verify(True)
+    except requests.exceptions.SSLError as e:
+        if not is_ssl_fallback_allowed(url):
+            raise FetchSSLError(f"SSL certificate verification failed: {e}") from e
+        return fetch_with_verify(False)
 
 
 async def safe_fetch_text_async(url: str, timeout: int = 15, max_bytes: int = MAX_FETCH_BYTES) -> str:
@@ -96,27 +137,35 @@ async def safe_fetch_text_async(url: str, timeout: int = 15, max_bytes: int = MA
     import aiohttp
 
     if not is_safe_url(url):
-        raise ValueError("Unsafe URL blocked")
+        raise UnsafeUrlError("Unsafe URL blocked")
 
-    current_url = url
-    client_timeout = aiohttp.ClientTimeout(total=timeout)
-    async with aiohttp.ClientSession(timeout=client_timeout, trust_env=False) as session:
-        for _ in range(MAX_REDIRECTS + 1):
-            async with session.get(current_url, allow_redirects=False) as response:
-                if 300 <= response.status < 400:
-                    location = response.headers.get("Location")
-                    if not location:
-                        raise ValueError("Redirect without Location blocked")
-                    current_url = _validate_next_url(current_url, location)
-                    continue
+    async def fetch_with_ssl(ssl_context) -> str:
+        current_url = url
+        client_timeout = aiohttp.ClientTimeout(total=timeout)
+        async with aiohttp.ClientSession(timeout=client_timeout, trust_env=False) as session:
+            for _ in range(MAX_REDIRECTS + 1):
+                async with session.get(current_url, allow_redirects=False, ssl=ssl_context) as response:
+                    if 300 <= response.status < 400:
+                        location = response.headers.get("Location")
+                        if not location:
+                            raise UnsafeUrlError("Redirect without Location blocked")
+                        current_url = _validate_next_url(current_url, location)
+                        continue
 
-                response.raise_for_status()
-                content = bytearray()
-                async for chunk in response.content.iter_chunked(8192):
-                    content.extend(chunk)
-                    if len(content) > max_bytes:
-                        raise ValueError("Response body too large")
-                charset = response.charset or "utf-8"
-                return bytes(content).decode(charset, errors="replace")
+                    response.raise_for_status()
+                    content = bytearray()
+                    async for chunk in response.content.iter_chunked(8192):
+                        content.extend(chunk)
+                        if len(content) > max_bytes:
+                            raise ValueError("Response body too large")
+                    charset = response.charset or "utf-8"
+                    return bytes(content).decode(charset, errors="replace")
 
-    raise ValueError("Too many redirects")
+        raise ValueError("Too many redirects")
+
+    try:
+        return await fetch_with_ssl(None)
+    except aiohttp.ClientSSLError as e:
+        if not is_ssl_fallback_allowed(url):
+            raise FetchSSLError(f"SSL certificate verification failed: {e}") from e
+        return await fetch_with_ssl(False)
