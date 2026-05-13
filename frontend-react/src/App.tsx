@@ -183,6 +183,7 @@ function App() {
   }, [theme]);
   // --- 追蹤 ID ---
   const sessionIdRef = useRef(getOrCreateId(sessionStorage, SESSION_ID_KEY));
+  const resetServerSessionRef = useRef(false);
   const userId = useRef(getOrCreateId(localStorage, USER_ID_KEY)).current;
   // [PERF-4] RAF handle 用於批次更新串流內容，避免每個 token 就觸發一次 re-render
   const rafRef = useRef<number | null>(null);
@@ -243,6 +244,7 @@ function App() {
     try {
       const response = await fetch(`${API_BASE_URL}/chat`, {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
         },
@@ -253,8 +255,10 @@ function App() {
           title_filter: selectedTags.length > 0 ? selectedTags.map(t => t.title) : null,
           session_id: sessionIdRef.current,
           user_id: userId,
+          reset_session: resetServerSessionRef.current,
         })
       });
+      resetServerSessionRef.current = false;
       if (!response.ok) {
         const errorText = await response.text().catch(() => '');
         throw new Error(`Network response was not ok (${response.status}): ${errorText}`);
@@ -388,6 +392,7 @@ function App() {
       const newSessionId = crypto.randomUUID();
       sessionStorage.setItem(SESSION_ID_KEY, newSessionId);
       sessionIdRef.current = newSessionId;
+      resetServerSessionRef.current = true;
     } catch (e) {
       console.warn('Failed to clear chat history from sessionStorage:', e);
     }

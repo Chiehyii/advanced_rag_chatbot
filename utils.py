@@ -28,6 +28,8 @@ def is_safe_url(url: str) -> bool:
         parsed_url = urlparse(url)
         if parsed_url.scheme not in ("http", "https"):
             return False
+        if parsed_url.port and parsed_url.port not in (80, 443):
+            return False
 
         hostname = parsed_url.hostname
         if not hostname:
@@ -66,6 +68,7 @@ def safe_fetch_text(url: str, timeout: int = 10, max_bytes: int = MAX_FETCH_BYTE
 
     current_url = url
     with requests.Session() as session:
+        session.trust_env = False
         for _ in range(MAX_REDIRECTS + 1):
             response = session.get(current_url, timeout=timeout, allow_redirects=False, stream=True)
             if response.is_redirect or response.is_permanent_redirect:
@@ -97,7 +100,7 @@ async def safe_fetch_text_async(url: str, timeout: int = 15, max_bytes: int = MA
 
     current_url = url
     client_timeout = aiohttp.ClientTimeout(total=timeout)
-    async with aiohttp.ClientSession(timeout=client_timeout) as session:
+    async with aiohttp.ClientSession(timeout=client_timeout, trust_env=False) as session:
         for _ in range(MAX_REDIRECTS + 1):
             async with session.get(current_url, allow_redirects=False) as response:
                 if 300 <= response.status < 400:

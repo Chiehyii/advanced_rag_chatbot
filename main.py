@@ -17,6 +17,7 @@ import traceback
 import json
 import time
 import hashlib
+import hmac
 from fastapi.responses import StreamingResponse, JSONResponse
 from rag_service import stream_chat_pipeline, stream_agent_pipeline
 import admin_api
@@ -38,6 +39,33 @@ def _get_real_ip(request: Request) -> str:
     return request.client.host if request.client else "127.0.0.1"
 
 limiter = Limiter(key_func=_get_real_ip)
+
+_SESSION_COOKIE_NAME = "chat_session"
+
+
+def _sign_session_id(session_id: str) -> str:
+    signature = hmac.new(
+        config.JWT_SECRET_KEY.encode("utf-8"),
+        session_id.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{session_id}.{signature}"
+
+
+def _verify_signed_session(value: str | None) -> str | None:
+    if not value or "." not in value:
+        return None
+    session_id, signature = value.rsplit(".", 1)
+    if len(session_id) != 32:
+        return None
+    expected = hmac.new(
+        config.JWT_SECRET_KEY.encode("utf-8"),
+        session_id.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    if hmac.compare_digest(signature, expected):
+        return session_id
+    return None
 
 # 簡單記憶體快取，用於 filter_scholarships (10分鐘 TTL)
 _scholarship_cache = {"data": None, "timestamp": 0}
@@ -104,6 +132,7 @@ async def limit_request_body_size(request: Request, call_next):
                 return JSONResponse(status_code=413, content={"detail": "Request body too large"})
         except ValueError:
             pass
+
     return await call_next(request)
 
 @app.middleware("http")
@@ -151,6 +180,7 @@ class ChatRequest(BaseModel):
     title_filter: List[str] | None = Field(None)
     session_id: Optional[str] = Field(None)
     user_id: Optional[str] = Field(None)
+    reset_session: bool = False
 
     @model_validator(mode="before")
     @classmethod
@@ -204,10 +234,12 @@ async def health_check():
     db_status = "ok" if getattr(config, 'DB_POOL', None) else "unavailable"
     return {"status": "ok", "db": db_status}
 
-@app.post("/test")
+@app.post("/test", include_in_schema=False)
 async def test_endpoint(request: Request):
+    if _is_production:
+        raise HTTPException(status_code=404, detail="Not found")
     body = await request.body()
-    return {"body_len": len(body), "body": body.decode('utf-8')}
+    return {"body_len": len(body)}
 
 @app.post("/chat")
 @limiter.limit(config.RATE_LIMIT_CHAT)
@@ -240,8 +272,10 @@ async def chat_endpoint(request: Request):
 
     # 取出 Middleware 注入的 request_id，以及前端傳入的 session_id / user_id
     rid = getattr(request.state, 'request_id', '-')
-    sid = chat_request.session_id
-    uid = chat_request.user_id
+    signed_cookie = request.cookies.get(_SESSION_COOKIE_NAME)
+    sid = None if chat_request.reset_session else _verify_signed_session(signed_cookie)
+    sid = sid or uuid.uuid4().hex
+    uid = None
     
     # 📝 INFO：記錄正常的請求進入
     logger.info(f"[Chat] Received new chat stream request (session={sid}, user={uid})")
@@ -297,7 +331,17 @@ async def chat_endpoint(request: Request):
             error_message = json.dumps({"type": "error", "data": "An error occurred on the server."})
             yield f"event: error\ndata: {error_message}\n\n"
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    response = StreamingResponse(event_generator(), media_type="text/event-stream")
+    if chat_request.reset_session or not _verify_signed_session(signed_cookie):
+        response.set_cookie(
+            key=_SESSION_COOKIE_NAME,
+            value=_sign_session_id(sid),
+            httponly=True,
+            secure=_is_production,
+            samesite="none" if _is_production else "lax",
+            max_age=60 * 60 * 24 * 30,
+        )
+    return response
 
 @app.post("/feedback")
 @limiter.limit(config.RATE_LIMIT_FEEDBACK)
