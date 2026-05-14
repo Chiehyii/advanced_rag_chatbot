@@ -1900,7 +1900,7 @@ a.inline-citation:hover sup {
 
 .tour-overlay-piece {
   position: fixed;
-  background: rgba(0, 0, 0, 0.55);
+  background: rgba(0, 0, 0, 0.20);
   pointer-events: auto;
   transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
 }

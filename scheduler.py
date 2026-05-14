@@ -20,6 +20,7 @@ logger = get_logger(__name__)
 
 EXTRACTION_MAX_COMPLETION_TOKENS = int(os.getenv("EXTRACTION_MAX_COMPLETION_TOKENS", "4000"))
 EXTRACTION_RETRY_MAX_COMPLETION_TOKENS = int(os.getenv("EXTRACTION_RETRY_MAX_COMPLETION_TOKENS", "6000"))
+CHECKPOINT_CLEANUP_INTERVAL_HOURS = int(os.getenv("CHECKPOINT_CLEANUP_INTERVAL_HOURS", "24"))
 
 
 def compute_md5(text: str) -> str:
@@ -283,12 +284,98 @@ def run_inspection():
         logger.warning(f"Failed to send summary notification: {e}")
 
 
+def cleanup_langgraph_checkpoints(retention_days: int | None = None):
+    """Keep LangGraph PostgreSQL checkpoints for recent sessions only."""
+    retention_days = retention_days or config.CHECKPOINT_RETENTION_DAYS
+    if retention_days <= 0:
+        logger.info("[Checkpoint Cleanup] Disabled because retention_days <= 0.")
+        return
+
+    logger.info(f"[Checkpoint Cleanup] Removing LangGraph checkpoints older than {retention_days} days.")
+
+    try:
+        with get_db_cursor(commit=True) as (conn, cursor):
+            cursor.execute(
+                """
+                SELECT to_regclass('checkpoints'),
+                       to_regclass('checkpoint_writes'),
+                       to_regclass('checkpoint_blobs');
+                """
+            )
+            checkpoints_table, writes_table, blobs_table = cursor.fetchone()
+            if not checkpoints_table:
+                logger.info("[Checkpoint Cleanup] LangGraph checkpoint tables do not exist yet; skipping.")
+                return
+
+            cursor.execute("ALTER TABLE IF EXISTS checkpoints ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();")
+            cursor.execute("ALTER TABLE IF EXISTS checkpoint_writes ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();")
+            cursor.execute("ALTER TABLE IF EXISTS checkpoint_blobs ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();")
+
+            cutoff_interval = f"{int(retention_days)} days"
+
+            deleted_writes = 0
+            if writes_table:
+                cursor.execute(
+                    """
+                    DELETE FROM checkpoint_writes cw
+                    USING checkpoints cp
+                    WHERE cw.thread_id = cp.thread_id
+                      AND cw.checkpoint_ns = cp.checkpoint_ns
+                      AND cw.checkpoint_id = cp.checkpoint_id
+                      AND COALESCE((cp.checkpoint ->> 'ts')::timestamptz, cp.created_at) < NOW() - %s::interval;
+                    """,
+                    (cutoff_interval,),
+                )
+                deleted_writes = cursor.rowcount
+
+            cursor.execute(
+                """
+                DELETE FROM checkpoints
+                WHERE COALESCE((checkpoint ->> 'ts')::timestamptz, created_at) < NOW() - %s::interval;
+                """,
+                (cutoff_interval,),
+            )
+            deleted_checkpoints = cursor.rowcount
+
+            deleted_blobs = 0
+            if blobs_table:
+                cursor.execute(
+                    """
+                    DELETE FROM checkpoint_blobs bl
+                    WHERE NOT EXISTS (
+                          SELECT 1
+                          FROM checkpoints cp
+                          WHERE cp.thread_id = bl.thread_id
+                            AND cp.checkpoint_ns = bl.checkpoint_ns
+                            AND cp.checkpoint -> 'channel_versions' ->> bl.channel = bl.version
+                      );
+                    """,
+                )
+                deleted_blobs = cursor.rowcount
+
+            logger.info(
+                "[Checkpoint Cleanup] Deleted checkpoints=%s, writes=%s, blobs=%s.",
+                deleted_checkpoints,
+                deleted_writes,
+                deleted_blobs,
+            )
+    except Exception as e:
+        logger.warning(f"[Checkpoint Cleanup] Failed: {e}", exc_info=True)
+
+
 def start_scheduler():
     scheduler = BackgroundScheduler()
     # Run every 24 hours
     scheduler.add_job(run_inspection, IntervalTrigger(hours=24), id='scholarship_inspection')
+    scheduler.add_job(
+        cleanup_langgraph_checkpoints,
+        IntervalTrigger(hours=CHECKPOINT_CLEANUP_INTERVAL_HOURS),
+        id='langgraph_checkpoint_cleanup',
+        replace_existing=True,
+        next_run_time=datetime.now(timezone.utc),
+    )
     scheduler.start()
-    logger.info("[Scheduler] Started background automated inspection.")
+    logger.info("[Scheduler] Started background automated inspection and checkpoint cleanup.")
 
 if __name__ == "__main__":
     # 允許您直接執行 `python scheduler.py` 進行手動測試
