@@ -66,7 +66,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
 
   const renderInline = (text: string, keyPrefix: string, ctxs: ContextLike[], options: { showCitationTooltip?: boolean } = {}): React.ReactNode[] => {
     const nodes: React.ReactNode[] = [];
-    const pattern = /(\[(\d+)\]|\[([^\]]+)\]\(([^)]+)\)|`([^`]+)`|\*\*([^*]+)\*\*)/g;
+    const pattern = /(\[(\d+)\]|\[([^\]]+)\]\(([^)]+)\)|`([^`]+)`|\*\*([^*]+)\*\*|<br\s*\/?>)/gi;
     let lastIndex = 0;
     let match: RegExpExecArray | null;
 
@@ -89,6 +89,8 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
         nodes.push(<code key={key}>{match[5]}</code>);
       } else if (match[6]) {
         nodes.push(<strong key={key}>{match[6]}</strong>);
+      } else if (match[0].toLowerCase().startsWith('<br')) {
+        nodes.push(<br key={key} />);
       }
 
       lastIndex = pattern.lastIndex;
