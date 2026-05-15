@@ -1177,19 +1177,27 @@ body {
 }
 
 .feedback-buttons {
-  text-align: left;
+  align-items: center;
+  display: flex;
+  gap: 2px;
+  justify-content: flex-start;
   padding-left: 0;
+  text-align: left;
 }
 
 .feedback-btn {
+  align-items: center;
   background: none;
   border: 1px solid transparent;
   border-radius: 15px;
-  width: 30px;
+  display: inline-flex;
   height: 30px;
+  justify-content: center;
+  line-height: 1;
   cursor: pointer;
   transition: background-color 0.2s, color 0.2s;
   padding: 0px 4px 0px 4px;
+  width: 30px;
 }
 
 .feedback-btn:hover {
@@ -1198,6 +1206,10 @@ body {
 
 .feedback-btn:hover {
   background-color: var(--bot-msg-bg);
+}
+
+.copy-response-btn.copied {
+  background-color: var(--card-hover-bg);
 }
 
 #feedback-modal {

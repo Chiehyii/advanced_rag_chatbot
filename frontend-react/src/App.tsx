@@ -45,10 +45,14 @@ export const translations = {
     example_question_10: "校外競賽獎勵",
     example_question_11: "大學部原住民可以申請甚麼獎助學金?",
     example_question_12: "弱勢助學",
-    reference_title: "來源：",
+    reference_title: "參考來源",
     unknown_source: "未知來源",
+    satisfied_title: "滿意",
+    dissatisfied_title: "不滿意",
+    copy_response_title: "複製",
+    copied_response_title: "已複製",
     chat_notice: "AI回答可能會出錯，請查證回覆內容。",
-    clear_chat_button_title: "Clear Chat",
+    clear_chat_button_title: "清除對話",
     help_button_title: "Help",
     help_alert: "系統問題請聯絡: \n\n校務研究中心 資料庫組\n電話: (03)856-5301 ext.11148\n信箱: chiehyi@gms.tcu.edu.tw",
     homepage_button: "首頁",
@@ -109,8 +113,12 @@ export const translations = {
     example_question_10: "Scholarships for participating in external competitions",
     example_question_11: "What scholarships are available for aboriginal students in the undergraduate level?",
     example_question_12: "Grants for Disadvantaged Students",
-    reference_title: "References:",
+    reference_title: "References",
     unknown_source: "Unknown source",
+    satisfied_title: "Satisfied",
+    dissatisfied_title: "Dissatisfied",
+    copy_response_title: "Copy",
+    copied_response_title: "Copied",
     chat_notice: "AI chat may produce errors, please verify the responses.",
     clear_chat_button_title: "Clear Chat",
     help_button_title: "Help",
@@ -482,7 +490,8 @@ function App() {
                   type="button"
                   className="header-icon-btn clear-chat-btn"
                   onClick={handleClearChat}
-                  title={t.clear_chat_button_title || t.clear_chat_button}
+                  title={t.clear_chat_button_title}
+                  aria-label={t.clear_chat_button_title}
                 >
                   <Trash2 size={20} strokeWidth={1.5} />
                 </button>

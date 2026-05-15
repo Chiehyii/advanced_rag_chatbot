@@ -59,7 +59,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({ language, onLanguageChan
             </div>
 
             {/* Help button — desktop only */}
-            <button type="button" className="header-text-btn help-btn desktop-actions" onClick={onHelp} title={t.help_button_title || t.help_button}>
+            <button type="button" className="header-text-btn help-btn desktop-actions" onClick={onHelp} title={t.help_button_title}>
               {t.help_button}
             </button>
 
@@ -68,7 +68,8 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({ language, onLanguageChan
               type="button"
               className="header-icon-btn clear-chat-btn"
               onClick={onClearChat}
-              title={t.clear_chat_button_title || t.clear_chat_button}
+              title={t.clear_chat_button_title}
+              aria-label={t.clear_chat_button_title}
             >
               <Trash2 size={20} strokeWidth={1.5} />
             </button>
