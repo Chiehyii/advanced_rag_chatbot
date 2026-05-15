@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Plus, X } from 'lucide-react';
 import { Language, ScholarshipTag } from '../types';
-import { translations } from '../App';
+import { translations } from '../translations';
 
 interface ChatInputProps {
   onSendMessage: (text: string) => void;

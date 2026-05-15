@@ -3,7 +3,7 @@ import { marked } from 'marked';
 import type { Token, Tokens } from 'marked';
 import { BookOpen, Check, ChevronDown, ChevronRight, Clipboard, Globe, Loader2, ThumbsDown, ThumbsUp } from 'lucide-react';
 import { Language, Message } from '../types';
-import { translations } from '../App';
+import { translations } from '../translations';
 
 interface MessageBubbleProps {
   message: Message;

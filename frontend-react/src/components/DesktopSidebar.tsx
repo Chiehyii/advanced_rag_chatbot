@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Globe, HelpCircle, ChevronRight, Menu, X, ExternalLink, BookOpen, Settings, Moon, Sun, Monitor } from 'lucide-react';
 import { Language, Theme } from '../types';
-import { translations } from '../App';
+import { translations } from '../translations';
 
 interface DesktopSidebarProps {
   language: Language;
