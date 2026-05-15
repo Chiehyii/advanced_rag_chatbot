@@ -41,7 +41,11 @@ def _get_real_ip(request: Request) -> str:
         return forwarded_for.split(",")[-1].strip()
     return request.client.host if request.client else "127.0.0.1"
 
-limiter = Limiter(key_func=_get_real_ip)
+limiter = Limiter(
+    key_func=_get_real_ip,
+    storage_uri=config.RATE_LIMIT_STORAGE_URI,
+    headers_enabled=True,
+)
 
 # 簡單記憶體快取，用於 filter_scholarships (10分鐘 TTL)
 _scholarship_cache = {"data": None, "timestamp": 0}

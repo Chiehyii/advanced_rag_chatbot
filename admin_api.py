@@ -34,7 +34,11 @@ def _get_real_ip(request: Request) -> str:
     return request.client.host if request.client else "127.0.0.1"
 
 # [SEC-4] 管理後台專屬的速率限制器
-limiter = Limiter(key_func=_get_real_ip)
+limiter = Limiter(
+    key_func=_get_real_ip,
+    storage_uri=config.RATE_LIMIT_STORAGE_URI,
+    headers_enabled=True,
+)
 
 # --- Models ---
 class ExtractRequest(BaseModel):

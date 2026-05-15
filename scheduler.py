@@ -21,6 +21,62 @@ logger = get_logger(__name__)
 EXTRACTION_MAX_COMPLETION_TOKENS = int(os.getenv("EXTRACTION_MAX_COMPLETION_TOKENS", "4000"))
 EXTRACTION_RETRY_MAX_COMPLETION_TOKENS = int(os.getenv("EXTRACTION_RETRY_MAX_COMPLETION_TOKENS", "6000"))
 CHECKPOINT_CLEANUP_INTERVAL_HOURS = int(os.getenv("CHECKPOINT_CLEANUP_INTERVAL_HOURS", "24"))
+SCHOLARSHIP_INSPECTION_LOCK_ID = 771001
+CHECKPOINT_CLEANUP_LOCK_ID = 771002
+
+
+def _run_with_advisory_lock(lock_id: int, job_name: str, func, *args, **kwargs):
+    """Run one scheduler job at a time across Uvicorn workers/instances."""
+    if not getattr(config, "SCHEDULER_LOCKS_ENABLED", True):
+        return func(*args, **kwargs)
+
+    if not config.DB_POOL:
+        logger.warning(f"[Scheduler] DB pool unavailable; running {job_name} without advisory lock.")
+        return func(*args, **kwargs)
+
+    conn = None
+    cursor = None
+    locked = False
+    try:
+        conn = config.DB_POOL.getconn()
+        cursor = conn.cursor()
+        cursor.execute("SELECT pg_try_advisory_lock(%s);", (lock_id,))
+        locked = bool(cursor.fetchone()[0])
+        if not locked:
+            logger.info(f"[Scheduler] Skipping {job_name}; another worker holds the advisory lock.")
+            return None
+
+        logger.info(f"[Scheduler] Acquired advisory lock for {job_name}.")
+        return func(*args, **kwargs)
+    except Exception as e:
+        logger.error(f"[Scheduler] Failed while running locked job {job_name}: {e}", exc_info=True)
+        return None
+    finally:
+        if cursor:
+            try:
+                if locked:
+                    cursor.execute("SELECT pg_advisory_unlock(%s);", (lock_id,))
+            except Exception as e:
+                logger.warning(f"[Scheduler] Failed to release advisory lock for {job_name}: {e}")
+            cursor.close()
+        if conn:
+            config.DB_POOL.putconn(conn)
+
+
+def run_inspection_once():
+    return _run_with_advisory_lock(
+        SCHOLARSHIP_INSPECTION_LOCK_ID,
+        "scholarship_inspection",
+        run_inspection,
+    )
+
+
+def cleanup_langgraph_checkpoints_once():
+    return _run_with_advisory_lock(
+        CHECKPOINT_CLEANUP_LOCK_ID,
+        "langgraph_checkpoint_cleanup",
+        cleanup_langgraph_checkpoints,
+    )
 
 
 def compute_md5(text: str) -> str:
@@ -366,9 +422,9 @@ def cleanup_langgraph_checkpoints(retention_days: int | None = None):
 def start_scheduler():
     scheduler = BackgroundScheduler()
     # Run every 24 hours
-    scheduler.add_job(run_inspection, IntervalTrigger(hours=24), id='scholarship_inspection')
+    scheduler.add_job(run_inspection_once, IntervalTrigger(hours=24), id='scholarship_inspection')
     scheduler.add_job(
-        cleanup_langgraph_checkpoints,
+        cleanup_langgraph_checkpoints_once,
         IntervalTrigger(hours=CHECKPOINT_CLEANUP_INTERVAL_HOURS),
         id='langgraph_checkpoint_cleanup',
         replace_existing=True,

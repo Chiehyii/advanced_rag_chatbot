@@ -46,7 +46,7 @@ langgraph-prebuilt==1.0.13
 langgraph-sdk==0.3.14
 langsmith==0.8.3
 license-expression==30.4.4
-limits==5.8.0
+limits[redis]==5.8.0
 markdown-it-py==4.2.0
 MarkupSafe==3.0.3
 mdurl==0.1.2
