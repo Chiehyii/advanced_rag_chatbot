@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { marked } from 'marked';
+import type { Token, Tokens } from 'marked';
 import { BookOpen, ChevronDown, ChevronRight, Globe, Loader2, ThumbsDown, ThumbsUp } from 'lucide-react';
 import { Language, Message } from '../types';
 import { translations } from '../App';
@@ -170,15 +171,21 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
     }).join('\n');
   };
 
-  const getTableCellText = (cell: any): string => {
+  const getTableCellText = (cell: Tokens.TableCell | string): string => {
     if (typeof cell === 'string') return cell;
-    return cell?.text || cell?.raw || '';
+    return cell.text || '';
+  };
+
+  const getTableTextAlign = (
+    align: Tokens.Table['align'][number] | undefined
+  ): React.CSSProperties['textAlign'] => {
+    return align || undefined;
   };
 
   const renderMarkdown = (text: string, ctxs: ContextLike[]) => {
-    const tokens = marked.lexer(normalizeMarkdownTables(text), { gfm: true, breaks: true }) as any[];
+    const tokens = marked.lexer(normalizeMarkdownTables(text), { gfm: true, breaks: true });
 
-    return tokens.map((token, idx) => {
+    return tokens.map((token: Token, idx: number) => {
       const key = `md-${idx}`;
 
       if (token.type === 'heading') {
@@ -194,8 +201,8 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
         const ListTag = token.ordered ? 'ol' : 'ul';
         return (
           <ListTag key={key}>
-            {(token.items || []).map((item: any, itemIdx: number) => (
-              <li key={`${key}-item-${itemIdx}`}>{renderInline(item.text || '', `${key}-item-${itemIdx}`, ctxs)}</li>
+            {token.items.map((item: Tokens.ListItem, itemIdx: number) => (
+              <li key={`${key}-item-${itemIdx}`}>{renderInline(item.text, `${key}-item-${itemIdx}`, ctxs)}</li>
             ))}
           </ListTag>
         );
@@ -207,18 +214,18 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
             <table>
               <thead>
                 <tr>
-                  {(token.header || []).map((cell: any, cellIdx: number) => (
-                    <th key={`${key}-head-${cellIdx}`} style={{ textAlign: token.align?.[cellIdx] || undefined }}>
+                  {token.header.map((cell: Tokens.TableCell, cellIdx: number) => (
+                    <th key={`${key}-head-${cellIdx}`} style={{ textAlign: getTableTextAlign(token.align[cellIdx]) }}>
                       {renderInline(getTableCellText(cell), `${key}-head-${cellIdx}`, ctxs, { showCitationTooltip: false })}
                     </th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {(token.rows || []).map((row: any[], rowIdx: number) => (
+                {token.rows.map((row: Tokens.TableCell[], rowIdx: number) => (
                   <tr key={`${key}-row-${rowIdx}`}>
-                    {row.map((cell: any, cellIdx: number) => (
-                      <td key={`${key}-cell-${rowIdx}-${cellIdx}`} style={{ textAlign: token.align?.[cellIdx] || undefined }}>
+                    {row.map((cell: Tokens.TableCell, cellIdx: number) => (
+                      <td key={`${key}-cell-${rowIdx}-${cellIdx}`} style={{ textAlign: getTableTextAlign(token.align[cellIdx]) }}>
                         {renderInline(getTableCellText(cell), `${key}-cell-${rowIdx}-${cellIdx}`, ctxs, { showCitationTooltip: false })}
                       </td>
                     ))}
@@ -244,7 +251,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
 
       if (token.type === 'space') return null;
 
-      return <p key={key}>{renderInline(token.raw || token.text || '', key, ctxs)}</p>;
+      return <p key={key}>{renderInline(token.raw || '', key, ctxs)}</p>;
     });
   };
 

@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import Select from 'react-select';
+import type { StylesConfig } from 'react-select';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import { Scholarship, AdminMode, MetadataSchema } from './types';
+import { Scholarship, AdminMode, MetadataSchema, getErrorMessage, isUnauthorizedError } from './types';
 import { apiSaveScholarship, apiUpdateScholarship, apiDeleteScholarship, apiDiscardPending, apiGetMetadataSchema } from './api';
 import './admin.css';
 
@@ -16,14 +17,14 @@ interface ScholarshipFormProps {
 }
 type OptionType = { value: string; label: string };
 const toOptions = (arr: string[] = []): OptionType[] => arr.map(s => ({ value: s, label: s }));
-const selectStyles = {
-    control: (base: any) => ({
+const selectStyles: StylesConfig<OptionType, boolean> = {
+    control: (base) => ({
         ...base, borderRadius: 10, borderColor: '#cbd5e1', fontSize: '0.95rem', minHeight: 44,
         boxShadow: 'none', ':hover': { borderColor: '#6366f1' },
     }),
-    multiValue: (base: any) => ({ ...base, backgroundColor: '#6366f1', borderRadius: 6 }),
-    multiValueLabel: (base: any) => ({ ...base, color: '#fff' }),
-    multiValueRemove: (base: any) => ({ ...base, color: '#fff', ':hover': { backgroundColor: '#4f46e5', color: '#fff' } }),
+    multiValue: (base) => ({ ...base, backgroundColor: '#6366f1', borderRadius: 6 }),
+    multiValueLabel: (base) => ({ ...base, color: '#fff' }),
+    multiValueRemove: (base) => ({ ...base, color: '#fff', ':hover': { backgroundColor: '#4f46e5', color: '#fff' } }),
 };
 
 export function ScholarshipForm({ initialData, mode, onSaved, onDeleted, onUnauthorized, onToast }: ScholarshipFormProps) {
@@ -118,9 +119,9 @@ export function ScholarshipForm({ initialData, mode, onSaved, onDeleted, onUnaut
                 onToast('✅ 新增成功！', 'success');
             }
             onSaved();
-        } catch (err: any) {
-            if (err.message === 'UNAUTHORIZED') { onUnauthorized(); return; }
-            onToast('儲存失敗：' + err.message, 'error');
+        } catch (err: unknown) {
+            if (isUnauthorizedError(err)) { onUnauthorized(); return; }
+            onToast('儲存失敗：' + getErrorMessage(err), 'error');
         } finally {
             setSaving(false);
         }
@@ -134,9 +135,9 @@ export function ScholarshipForm({ initialData, mode, onSaved, onDeleted, onUnaut
             await apiDeleteScholarship(code);
             onToast('✅ 刪除成功！', 'success');
             onDeleted();
-        } catch (err: any) {
-            if (err.message === 'UNAUTHORIZED') { onUnauthorized(); return; }
-            onToast('刪除失敗：' + err.message, 'error');
+        } catch (err: unknown) {
+            if (isUnauthorizedError(err)) { onUnauthorized(); return; }
+            onToast('刪除失敗：' + getErrorMessage(err), 'error');
         } finally {
             setDeleting(false);
         }
@@ -150,9 +151,9 @@ export function ScholarshipForm({ initialData, mode, onSaved, onDeleted, onUnaut
             await apiDiscardPending(code);
             onToast('✅ 已捨棄草稿，資料庫內容維持原狀。', 'success');
             onSaved(); // 回到 dashboard 並刷新清單
-        } catch (err: any) {
-            if (err.message === 'UNAUTHORIZED') { onUnauthorized(); return; }
-            onToast('捨棄失敗：' + err.message, 'error');
+        } catch (err: unknown) {
+            if (isUnauthorizedError(err)) { onUnauthorized(); return; }
+            onToast('捨棄失敗：' + getErrorMessage(err), 'error');
         } finally {
             setDiscarding(false);
         }

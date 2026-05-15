@@ -32,10 +32,10 @@ const SidebarContent: React.FC<DesktopSidebarProps & { onClose?: () => void }> =
           type="button"
           className="sidebar-nav-item"
           onClick={() => { window.open('https://yizhu.tcu.edu.tw/', '_blank'); if (onClose) onClose(); }}
-          title={(t as any).homepage_button || '首頁'}
+          title={t.homepage_button || '首頁'}
         >
           <ExternalLink size={20} strokeWidth={1.5} />
-          <span className="sidebar-nav-label">{(t as any).homepage_button || '首頁'}</span>
+          <span className="sidebar-nav-label">{t.homepage_button || '首頁'}</span>
         </button>
 
         {/* Settings switcher */}
@@ -44,10 +44,10 @@ const SidebarContent: React.FC<DesktopSidebarProps & { onClose?: () => void }> =
             type="button"
             className="sidebar-nav-item"
             onClick={() => setSettingsOpen(prev => !prev)}
-            title={(t as any).settings_button || 'Settings'}
+            title={t.settings_button || 'Settings'}
           >
             <Settings size={20} strokeWidth={1.5} />
-            <span className="sidebar-nav-label">{(t as any).settings_button || 'Settings'}</span>
+            <span className="sidebar-nav-label">{t.settings_button || 'Settings'}</span>
             <ChevronRight size={14} strokeWidth={1.5} className={`sidebar-chevron ${settingsOpen ? 'open' : ''}`} />
           </button>
           {settingsOpen && (
@@ -72,13 +72,13 @@ const SidebarContent: React.FC<DesktopSidebarProps & { onClose?: () => void }> =
               {/* Theme Section */}
               <div className="sidebar-sub-menu-section">
                 <div className="sidebar-sub-menu-title">
-                  <Monitor size={14} /> <span>{(t as any).theme_title || 'Theme'}</span>
+                  <Monitor size={14} /> <span>{t.theme_title || 'Theme'}</span>
                 </div>
                 {(['system', 'light', 'dark'] as Theme[]).map(th => {
                   const Icon = th === 'dark' ? Moon : (th === 'light' ? Sun : Monitor);
-                  const label = th === 'dark' ? ((t as any).theme_dark || 'Dark') : 
-                                th === 'light' ? ((t as any).theme_light || 'Light') : 
-                                ((t as any).theme_system || 'System');
+                  const label = th === 'dark' ? (t.theme_dark || 'Dark') :
+                                th === 'light' ? (t.theme_light || 'Light') :
+                                (t.theme_system || 'System');
                   return (
                     <button
                       key={th}
@@ -101,10 +101,10 @@ const SidebarContent: React.FC<DesktopSidebarProps & { onClose?: () => void }> =
           type="button"
           className="sidebar-nav-item"
           onClick={() => { onTour(); if (onClose) onClose(); }}
-          title={(t as any).tour_button || '使用說明'}
+          title={t.tour_button || '使用說明'}
         >
           <BookOpen size={20} strokeWidth={1.5} />
-          <span className="sidebar-nav-label">{(t as any).tour_button || '使用說明'}</span>
+          <span className="sidebar-nav-label">{t.tour_button || '使用說明'}</span>
         </button>
 
         {/* Help */}

@@ -1,7 +1,35 @@
 // Type declarations for libraries loaded via CDN
-declare const marked: any;
-declare const Choices: any;
-declare const DOMPurify: any;
+declare const marked: {
+    parse: (markdown: string) => string;
+};
+declare const DOMPurify: {
+    sanitize: (dirty: string) => string;
+};
+
+interface ChoicesOption {
+    value: string;
+    label: string;
+}
+
+interface ChoicesConfig {
+    allowHTML?: boolean;
+    removeItemButton?: boolean;
+    searchEnabled?: boolean;
+    itemSelectText?: string;
+    placeholder?: boolean;
+    placeholderValue?: string;
+}
+
+interface ChoicesInstance {
+    setChoices(choices: ChoicesOption[], value: 'value', label: 'label', replaceChoices?: boolean): void;
+    getValue(valueOnly: true): string[];
+    removeActiveItems(): void;
+    setChoiceByValue(value: string | string[]): void;
+}
+
+declare const Choices: {
+    new (selector: string, config: ChoicesConfig): ChoicesInstance;
+};
 
 interface Scholarship {
     scholarship_code: string;
@@ -18,6 +46,16 @@ interface Scholarship {
     markdown_content?: string;
     created_at?: string;
 }
+
+interface MetadataSchema {
+    education_system: string[];
+    tags: string[];
+    identity: string[];
+}
+
+const getErrorMessage = (error: unknown): string => {
+    return error instanceof Error ? error.message : String(error);
+};
 
 document.addEventListener('DOMContentLoaded', () => {
     // --- Elements ---
@@ -52,14 +90,14 @@ document.addEventListener('DOMContentLoaded', () => {
     let allScholarships: Scholarship[] = [];
 
     // Main Form Choices
-    let eduChoices: any = null;
-    let tagsChoices: any = null;
-    let identityChoices: any = null;
+    let eduChoices: ChoicesInstance | null = null;
+    let tagsChoices: ChoicesInstance | null = null;
+    let identityChoices: ChoicesInstance | null = null;
 
     // Sidebar Filter Choices
-    let filterEduChoices: any = null;
-    let filterTagsChoices: any = null;
-    let filterIdentityChoices: any = null;
+    let filterEduChoices: ChoicesInstance | null = null;
+    let filterTagsChoices: ChoicesInstance | null = null;
+    let filterIdentityChoices: ChoicesInstance | null = null;
 
     // --- Init ---
     checkAuth();
@@ -82,10 +120,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Functions ---
     // Helper to perform authenticated fetch
     async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
-        if (!options.headers) options.headers = {} as any;
-        (options.headers as any)['X-Requested-With'] = 'XMLHttpRequest';
+        const headers = new Headers(options.headers);
+        headers.set('X-Requested-With', 'XMLHttpRequest');
 
-        let res = await fetch(url, { ...options, credentials: 'include' });
+        let res = await fetch(url, { ...options, headers, credentials: 'include' });
         if (res.status === 401) {
             const refreshRes = await fetch('/api/refresh', {
                 method: 'POST',
@@ -93,7 +131,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 headers: { 'X-Requested-With': 'XMLHttpRequest' },
             });
             if (refreshRes.ok) {
-                res = await fetch(url, { ...options, credentials: 'include' });
+                res = await fetch(url, { ...options, headers, credentials: 'include' });
             } else {
                 logout();
             }
@@ -149,7 +187,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             initChoices();
             fetchScholarships();
-        } catch (error) {
+        } catch {
             loginError.classList.remove('hidden');
         } finally {
             btn.disabled = false;
@@ -160,7 +198,7 @@ document.addEventListener('DOMContentLoaded', () => {
     async function initChoices() {
         try {
             const res = await fetch('/metadata_schema.json');
-            const schema = await res.json();
+            const schema = await res.json() as MetadataSchema;
 
             const choicesSettings = { allowHTML: true, removeItemButton: true, searchEnabled: true, itemSelectText: '' };
 
@@ -241,7 +279,7 @@ document.addEventListener('DOMContentLoaded', () => {
         renderList(filtered);
     }
 
-    function renderList(items: any[]) {
+    function renderList(items: Scholarship[]) {
         listContainer.innerHTML = '';
         if (items.length === 0) {
             listContainer.innerHTML = '<li><div class="meta" style="text-align:center; padding: 20px 0;">目前資料庫為空</div></li>';
@@ -279,8 +317,8 @@ document.addEventListener('DOMContentLoaded', () => {
             resultSection.classList.remove('hidden');
             resultSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
-        } catch (error: any) {
-            showToast('載入失敗：' + error.message, 'error');
+        } catch (error: unknown) {
+            showToast('載入失敗：' + getErrorMessage(error), 'error');
         }
     }
 
@@ -317,8 +355,8 @@ document.addEventListener('DOMContentLoaded', () => {
             resultSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
             showToast('✨ AI 分析完成！', 'success');
 
-        } catch (error: any) {
-            showToast(error.message, 'error');
+        } catch (error: unknown) {
+            showToast(getErrorMessage(error), 'error');
         } finally {
             overlay.classList.remove('active');
             setTimeout(() => overlay.classList.add('hidden'), 300);
@@ -429,8 +467,8 @@ document.addEventListener('DOMContentLoaded', () => {
             resultSection.classList.add('hidden');
             window.scrollTo({ top: 0, behavior: 'smooth' });
 
-        } catch (error: any) {
-            showToast('儲存失敗：' + error.message, 'error');
+        } catch (error: unknown) {
+            showToast('儲存失敗：' + getErrorMessage(error), 'error');
         } finally {
             btnSave.innerText = originalText;
             btnSave.disabled = false;
@@ -465,8 +503,8 @@ document.addEventListener('DOMContentLoaded', () => {
             resultSection.classList.add('hidden');
             window.scrollTo({ top: 0, behavior: 'smooth' });
 
-        } catch (error: any) {
-            showToast('刪除失敗：' + error.message, 'error');
+        } catch (error: unknown) {
+            showToast('刪除失敗：' + getErrorMessage(error), 'error');
         } finally {
             btnDelete.innerText = originalText;
             btnDelete.disabled = false;
