@@ -32,7 +32,7 @@ export const translations = {
     copy_response_title: "複製",
     copied_response_title: "已複製",
     chat_notice: "AI回答可能會出錯，請查證回覆內容。",
-    clear_chat_button_title: "Clear Chat",
+    clear_chat_button_title: "清除對話",
     help_button_title: "Help",
     help_alert: "系統問題請聯絡: \n\n校務研究中心 資料庫組\n電話: (03)856-5301 ext.11148\n信箱: chiehyi@gms.tcu.edu.tw",
     homepage_button: "首頁",
