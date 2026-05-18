@@ -89,7 +89,7 @@ app.add_middleware(
     allow_origins=config.ALLOWED_ORIGINS_LIST,  # Use the allowlist from config
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "Accept", "X-Request-ID", "X-Requested-With"],
+    allow_headers=["Content-Type", "Authorization", "Accept", "X-Request-ID", "X-Requested-With", "X-CSRF-Token"],
     expose_headers=["X-Chat-Session-Token"],
 )
 app.add_middleware(RequestBodyLimitMiddleware, max_body_size=config.MAX_REQUEST_BODY_BYTES)

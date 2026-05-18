@@ -79,7 +79,7 @@ export function ScholarshipForm({ initialData, mode, onSaved, onDeleted, onUnaut
         setIdentitySelected(toOptions(initialData.identity));
         setResidenceSelected(toOptions(initialData.registered_residence));
         setNationalitySelected(toOptions(initialData.nationality));
-    }, [initialData]);
+    }, [initialData, needsReview]);
 
     useEffect(() => {
         if (previewRef.current) {

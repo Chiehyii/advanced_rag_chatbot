@@ -51,6 +51,7 @@ ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
 TRUST_PROXY_HEADERS = os.getenv("TRUST_PROXY_HEADERS", "false").lower() == "true"
 MAX_REQUEST_BODY_BYTES = int(os.getenv("MAX_REQUEST_BODY_BYTES", str(1 * 1024 * 1024)))
 CHECKPOINT_RETENTION_DAYS = int(os.getenv("CHECKPOINT_RETENTION_DAYS", "7"))
+QA_LOG_RETENTION_DAYS = int(os.getenv("QA_LOG_RETENTION_DAYS", "90"))
 SCHEDULER_LOCKS_ENABLED = os.getenv("SCHEDULER_LOCKS_ENABLED", "true").lower() == "true"
 
 # --- CORS ---

@@ -86,6 +86,7 @@ import bcrypt
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/login", auto_error=False)
 ADMIN_ACCESS_COOKIE_NAME = "admin_access"
 ADMIN_REFRESH_COOKIE_NAME = "admin_refresh"
+ADMIN_CSRF_COOKIE_NAME = "admin_csrf"
 
 
 def _cookie_kwargs():
@@ -94,6 +95,31 @@ def _cookie_kwargs():
         "secure": config.ENVIRONMENT == "production",
         "samesite": "none" if config.ENVIRONMENT == "production" else "lax",
     }
+
+
+def _csrf_cookie_kwargs():
+    return {
+        "httponly": False,
+        "secure": config.ENVIRONMENT == "production",
+        "samesite": "none" if config.ENVIRONMENT == "production" else "lax",
+    }
+
+
+def create_csrf_token(username: str):
+    return create_access_token(
+        data={"sub": username, "jti": secrets.token_urlsafe(16)},
+        expires_delta=timedelta(days=config.REFRESH_TOKEN_EXPIRE_DAYS),
+        token_type="csrf",
+    )
+
+
+def _set_csrf_cookie(response: Response, csrf_token: str):
+    response.set_cookie(
+        ADMIN_CSRF_COOKIE_NAME,
+        csrf_token,
+        max_age=config.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
+        **_csrf_cookie_kwargs(),
+    )
 
 
 def _set_auth_cookies(response: Response, access_token: str, refresh_token: str):
@@ -114,6 +140,7 @@ def _set_auth_cookies(response: Response, access_token: str, refresh_token: str)
 def _clear_auth_cookies(response: Response):
     response.delete_cookie(ADMIN_ACCESS_COOKIE_NAME, **_cookie_kwargs())
     response.delete_cookie(ADMIN_REFRESH_COOKIE_NAME, **_cookie_kwargs())
+    response.delete_cookie(ADMIN_CSRF_COOKIE_NAME, **_csrf_cookie_kwargs())
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None, token_type: str = "access"):
     to_encode = data.copy()
@@ -164,6 +191,36 @@ def _issue_refresh_token(username: str, expires_delta: timedelta) -> str:
         )
     return token
 
+
+def _validate_csrf_token(request: Request, username: str):
+    header_token = request.headers.get("X-CSRF-Token")
+    cookie_token = request.cookies.get(ADMIN_CSRF_COOKIE_NAME)
+    if not header_token or not cookie_token or not secrets.compare_digest(header_token, cookie_token):
+        raise HTTPException(status_code=403, detail="Invalid CSRF token")
+
+    try:
+        payload = jwt.decode(header_token, config.JWT_SECRET_KEY, algorithms=[config.ALGORITHM])
+        token_type = payload.get("type")
+        subject = payload.get("sub")
+        if token_type != "csrf" or subject != username:
+            raise HTTPException(status_code=403, detail="Invalid CSRF token")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=403, detail="Invalid CSRF token")
+
+
+def _subject_from_token(token: str | None, expected_type: str) -> str | None:
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, config.JWT_SECRET_KEY, algorithms=[config.ALGORITHM])
+    except jwt.InvalidTokenError:
+        return None
+    username = payload.get("sub")
+    token_type = payload.get("type", "access")
+    if username != config.ADMIN_USERNAME or token_type != expected_type:
+        return None
+    return username
+
 def verify_admin(request: Request, token: str | None = Depends(oauth2_scheme)):
     credentials_exception = HTTPException(
         status_code=401,
@@ -182,6 +239,8 @@ def verify_admin(request: Request, token: str | None = Depends(oauth2_scheme)):
         token_type: str = payload.get("type", "access")
         if username is None or username != config.ADMIN_USERNAME or token_type != "access":
             raise credentials_exception
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+            _validate_csrf_token(request, username)
     except jwt.InvalidTokenError:
         raise credentials_exception
     return username
@@ -391,10 +450,13 @@ async def login(request: Request, response: Response, form_data: OAuth2PasswordR
     
     refresh_token_expires = timedelta(days=config.REFRESH_TOKEN_EXPIRE_DAYS)
     refresh_token = _issue_refresh_token(config.ADMIN_USERNAME, refresh_token_expires)
+    csrf_token = create_csrf_token(config.ADMIN_USERNAME)
     _set_auth_cookies(response, access_token, refresh_token)
+    _set_csrf_cookie(response, csrf_token)
     return {
         "status": "success",
-        "token_type": "bearer"
+        "token_type": "bearer",
+        "csrf_token": csrf_token,
     }
 
 class RefreshTokenRequest(BaseModel):
@@ -424,6 +486,7 @@ async def refresh_token(request: Request, response: Response, refresh_request: R
         jti: str = payload.get("jti")
         if username is None or username != config.ADMIN_USERNAME or token_type != "refresh" or not jti:
             raise credentials_exception
+        _validate_csrf_token(request, username)
 
         _ensure_auth_tables()
         token_hash = _hash_token(refresh_token_value)
@@ -450,8 +513,10 @@ async def refresh_token(request: Request, response: Response, refresh_request: R
         )
         refresh_token_expires = timedelta(days=config.REFRESH_TOKEN_EXPIRE_DAYS)
         new_refresh_token = _issue_refresh_token(config.ADMIN_USERNAME, refresh_token_expires)
+        csrf_token = create_csrf_token(config.ADMIN_USERNAME)
         _set_auth_cookies(response, access_token, new_refresh_token)
-        return {"status": "success", "token_type": "bearer"}
+        _set_csrf_cookie(response, csrf_token)
+        return {"status": "success", "token_type": "bearer", "csrf_token": csrf_token}
     except jwt.InvalidTokenError:
         raise credentials_exception
 
@@ -487,9 +552,24 @@ async def logout(response: Response, request: Request, refresh_request: RefreshT
     return {"status": "success"}
 
 
+@router.get("/csrf")
+def admin_csrf(response: Response, request: Request):
+    username = _subject_from_token(request.cookies.get(ADMIN_ACCESS_COOKIE_NAME), "access")
+    if username is None:
+        username = _subject_from_token(request.cookies.get(ADMIN_REFRESH_COOKIE_NAME), "refresh")
+    if username is None:
+        raise HTTPException(status_code=401, detail="Could not validate credentials")
+
+    csrf_token = create_csrf_token(username)
+    _set_csrf_cookie(response, csrf_token)
+    return {"status": "success", "csrf_token": csrf_token}
+
+
 @router.get("/me")
-def admin_me(current_admin: str = Depends(verify_admin)):
-    return {"status": "success", "username": current_admin}
+def admin_me(response: Response, current_admin: str = Depends(verify_admin)):
+    csrf_token = create_csrf_token(current_admin)
+    _set_csrf_cookie(response, csrf_token)
+    return {"status": "success", "username": current_admin, "csrf_token": csrf_token}
 
 def _parse_json_array(value):
     """Safely parse a JSON string into a list. Returns [] on failure."""

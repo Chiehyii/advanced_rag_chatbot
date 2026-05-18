@@ -10,6 +10,7 @@ import config
 from db import get_db_cursor
 from utils import FetchSSLError, UnsafeUrlError, safe_fetch_text_async
 from logger import get_logger
+from psycopg2 import sql as pg_sql
 from notifier import send_line_message
 from prompts import PROMPTS
 from admin_api import openai_client
@@ -23,6 +24,7 @@ EXTRACTION_RETRY_MAX_COMPLETION_TOKENS = int(os.getenv("EXTRACTION_RETRY_MAX_COM
 CHECKPOINT_CLEANUP_INTERVAL_HOURS = int(os.getenv("CHECKPOINT_CLEANUP_INTERVAL_HOURS", "24"))
 SCHOLARSHIP_INSPECTION_LOCK_ID = 771001
 CHECKPOINT_CLEANUP_LOCK_ID = 771002
+QA_LOG_CLEANUP_LOCK_ID = 771003
 
 
 def _run_with_advisory_lock(lock_id: int, job_name: str, func, *args, **kwargs):
@@ -76,6 +78,14 @@ def cleanup_langgraph_checkpoints_once():
         CHECKPOINT_CLEANUP_LOCK_ID,
         "langgraph_checkpoint_cleanup",
         cleanup_langgraph_checkpoints,
+    )
+
+
+def cleanup_qa_logs_once():
+    return _run_with_advisory_lock(
+        QA_LOG_CLEANUP_LOCK_ID,
+        "qa_log_cleanup",
+        cleanup_qa_logs,
     )
 
 
@@ -419,6 +429,31 @@ def cleanup_langgraph_checkpoints(retention_days: int | None = None):
         logger.warning(f"[Checkpoint Cleanup] Failed: {e}", exc_info=True)
 
 
+def cleanup_qa_logs(retention_days: int | None = None):
+    """Delete old chat QA logs to reduce retained user data."""
+    retention_days = retention_days if retention_days is not None else config.QA_LOG_RETENTION_DAYS
+    if retention_days <= 0:
+        logger.info("[QA Log Cleanup] Disabled because retention_days <= 0.")
+        return
+
+    logger.info(f"[QA Log Cleanup] Removing QA logs older than {retention_days} days.")
+
+    try:
+        with get_db_cursor(commit=True) as (conn, cursor):
+            cursor.execute(
+                pg_sql.SQL(
+                    """
+                    DELETE FROM {}
+                    WHERE timestamp < NOW() - %s::interval;
+                    """
+                ).format(pg_sql.Identifier(config.DB_TABLE_NAME)),
+                (f"{int(retention_days)} days",),
+            )
+            logger.info(f"[QA Log Cleanup] Deleted qa_logs={cursor.rowcount}.")
+    except Exception as e:
+        logger.warning(f"[QA Log Cleanup] Failed: {e}", exc_info=True)
+
+
 def start_scheduler():
     scheduler = BackgroundScheduler()
     # Run every 24 hours
@@ -427,6 +462,13 @@ def start_scheduler():
         cleanup_langgraph_checkpoints_once,
         IntervalTrigger(hours=CHECKPOINT_CLEANUP_INTERVAL_HOURS),
         id='langgraph_checkpoint_cleanup',
+        replace_existing=True,
+        next_run_time=datetime.now(timezone.utc),
+    )
+    scheduler.add_job(
+        cleanup_qa_logs_once,
+        IntervalTrigger(hours=CHECKPOINT_CLEANUP_INTERVAL_HOURS),
+        id='qa_log_cleanup',
         replace_existing=True,
         next_run_time=datetime.now(timezone.utc),
     )
