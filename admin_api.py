@@ -27,6 +27,7 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/api", tags=["admin"])
 openai_client = OpenAI(api_key=config.OPENAI_API_KEY)
 _auth_tables_ready = False
+_audit_tables_ready = False
 
 def _get_real_ip(request: Request) -> str:
     forwarded_for = request.headers.get("X-Forwarded-For", "")
@@ -172,6 +173,70 @@ def _ensure_auth_tables():
             );
         """)
     _auth_tables_ready = True
+
+
+def _ensure_audit_tables():
+    global _audit_tables_ready
+    if _audit_tables_ready:
+        return
+    with get_db_cursor(commit=True) as (conn, cursor):
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS admin_audit_logs (
+                id BIGSERIAL PRIMARY KEY,
+                actor VARCHAR(255),
+                action VARCHAR(80) NOT NULL,
+                resource_type VARCHAR(80),
+                resource_id VARCHAR(255),
+                status VARCHAR(32) NOT NULL,
+                ip_address VARCHAR(64),
+                user_agent TEXT,
+                details JSONB,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_admin_audit_logs_created_at
+            ON admin_audit_logs (created_at DESC);
+        """)
+    _audit_tables_ready = True
+
+
+def _audit_admin_action(
+    action: str,
+    actor: str | None = None,
+    *,
+    request: Request | None = None,
+    resource_type: str | None = None,
+    resource_id: str | None = None,
+    status: str = "success",
+    details: dict | None = None,
+):
+    try:
+        _ensure_audit_tables()
+        ip_address = _get_real_ip(request) if request else None
+        user_agent = (request.headers.get("User-Agent") or "")[:500] if request else None
+        with get_db_cursor(commit=True) as (conn, cursor):
+            cursor.execute(
+                """
+                INSERT INTO admin_audit_logs (
+                    actor, action, resource_type, resource_id, status,
+                    ip_address, user_agent, details
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb);
+                """,
+                (
+                    actor,
+                    action,
+                    resource_type,
+                    resource_id,
+                    status,
+                    ip_address,
+                    user_agent,
+                    json.dumps(details or {}, ensure_ascii=False),
+                ),
+            )
+    except Exception as e:
+        logger.warning(f"[Audit] Failed to write admin audit log: {e}", exc_info=True)
 
 def _issue_refresh_token(username: str, expires_delta: timedelta) -> str:
     _ensure_auth_tables()
@@ -454,6 +519,13 @@ def dashboard_recent(limit: int = 20, current_admin: str = Depends(verify_admin)
 @limiter.limit("5/minute")  # [SEC-4] 防止暴力破解，每個 IP 每分鐘最多嘗試 5 次
 async def login(request: Request, response: Response, form_data: OAuth2PasswordRequestForm = Depends()):
     if form_data.username != config.ADMIN_USERNAME:
+        _audit_admin_action(
+            "login",
+            form_data.username[:255] if form_data.username else None,
+            request=request,
+            status="failure",
+            details={"reason": "invalid_username"},
+        )
         raise HTTPException(
             status_code=401,
             detail="Incorrect username or password",
@@ -462,6 +534,13 @@ async def login(request: Request, response: Response, form_data: OAuth2PasswordR
         
     # [SEC-1] 強制使用 Hash 比對，移除明文備用機制
     if not config.ADMIN_PASSWORD_HASH:
+        _audit_admin_action(
+            "login",
+            form_data.username[:255],
+            request=request,
+            status="failure",
+            details={"reason": "missing_password_hash"},
+        )
         raise HTTPException(
             status_code=500,
             detail="Server configuration error regarding admin credentials."
@@ -475,6 +554,13 @@ async def login(request: Request, response: Response, form_data: OAuth2PasswordR
         is_valid = False
 
     if not is_valid:
+        _audit_admin_action(
+            "login",
+            form_data.username[:255],
+            request=request,
+            status="failure",
+            details={"reason": "invalid_password"},
+        )
         raise HTTPException(
             status_code=401,
             detail="Incorrect username or password",
@@ -490,6 +576,7 @@ async def login(request: Request, response: Response, form_data: OAuth2PasswordR
     csrf_token = create_csrf_token(config.ADMIN_USERNAME)
     _set_auth_cookies(response, access_token, refresh_token)
     _set_csrf_cookie(response, csrf_token)
+    _audit_admin_action("login", config.ADMIN_USERNAME, request=request)
     return {
         "status": "success",
         "token_type": "bearer",
@@ -553,6 +640,7 @@ async def refresh_token(request: Request, response: Response, refresh_request: R
         csrf_token = create_csrf_token(config.ADMIN_USERNAME)
         _set_auth_cookies(response, access_token, new_refresh_token)
         _set_csrf_cookie(response, csrf_token)
+        _audit_admin_action("refresh", config.ADMIN_USERNAME, request=request)
         return {"status": "success", "token_type": "bearer", "csrf_token": csrf_token}
     except jwt.InvalidTokenError:
         raise credentials_exception
@@ -586,6 +674,7 @@ async def logout(response: Response, request: Request, refresh_request: RefreshT
     except jwt.InvalidTokenError:
         pass
     _clear_auth_cookies(response)
+    _audit_admin_action("logout", current_admin, request=request)
     return {"status": "success"}
 
 
@@ -696,7 +785,7 @@ def get_scholarship(scholarship_code: str, current_admin: str = Depends(verify_a
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 @router.patch("/scholarships/{scholarship_code}/discard_pending")
-def discard_pending(scholarship_code: str, current_admin: str = Depends(verify_admin)):
+def discard_pending(scholarship_code: str, request: Request, current_admin: str = Depends(verify_admin)):
     """管理員捨棄 Scheduler 暫存的草稿，清除 pending_data 並取消待處理標記。"""
     scholarship_code = validate_scholarship_code(scholarship_code)  # [SEC-2]
     try:
@@ -705,31 +794,38 @@ def discard_pending(scholarship_code: str, current_admin: str = Depends(verify_a
                 "UPDATE tcuscholarships SET needs_review = FALSE, pending_data = NULL WHERE scholarship_code = %s",
                 (scholarship_code,)
             )
+        _audit_admin_action(
+            "discard_pending",
+            current_admin,
+            request=request,
+            resource_type="scholarship",
+            resource_id=scholarship_code,
+        )
         return {"status": "success", "message": "Pending changes discarded"}
     except Exception as e:
         logger.error(f"[Admin API] Internal error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 @router.post("/extract_info")
-def extract_scholarship_info(request: ExtractRequest, current_admin: str = Depends(verify_admin)):
-    if not request.url and not request.text:
+def extract_scholarship_info(extract_request: ExtractRequest, http_request: Request, current_admin: str = Depends(verify_admin)):
+    if not extract_request.url and not extract_request.text:
         raise HTTPException(status_code=400, detail="Must provide either 'url' or 'text'")
     
     content_to_process = ""
     
-    if request.url:
+    if extract_request.url:
         try:
-            fetched_text = safe_fetch_text(request.url, timeout=10)
+            fetched_text = safe_fetch_text(extract_request.url, timeout=10)
             soup = BeautifulSoup(fetched_text, "html.parser")
             # Extract basic text
             content_to_process = soup.get_text(separator="\n", strip=True)
-            content_to_process = f"URL: {request.url}\n\nContent:\n{content_to_process}"
+            content_to_process = f"URL: {extract_request.url}\n\nContent:\n{content_to_process}"
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Failed to load URL: {e}")
     else:
-        content_to_process = request.text
+        content_to_process = extract_request.text
         
     system_prompt = PROMPTS['zh']['extraction_system']
     
@@ -746,9 +842,17 @@ def extract_scholarship_info(request: ExtractRequest, current_admin: str = Depen
         extracted_data = normalize_extracted_scholarship(
             json.loads(response.choices[0].message.content),
             fallback_code="sch-" + str(uuid.uuid4())[:8],
-            fallback_url=request.url,
+            fallback_url=extract_request.url,
         )
 
+        _audit_admin_action(
+            "extract_info",
+            current_admin,
+            request=http_request,
+            resource_type="scholarship",
+            resource_id=extracted_data.get("scholarship_code"),
+            details={"source": "url" if extract_request.url else "text"},
+        )
         return {"status": "success", "data": extracted_data}
         
     except Exception as e:
@@ -757,7 +861,7 @@ def extract_scholarship_info(request: ExtractRequest, current_admin: str = Depen
 
 
 @router.post("/scholarships")
-def save_scholarship(form: ScholarshipForm, current_admin: str = Depends(verify_admin)):
+def save_scholarship(request: Request, form: ScholarshipForm, current_admin: str = Depends(verify_admin)):
     validate_scholarship_code(form.scholarship_code)  # [SEC-2]
     # 1. Save to PostgreSQL
     try:
@@ -814,13 +918,20 @@ def save_scholarship(form: ScholarshipForm, current_admin: str = Depends(verify_
             form.category, form.tags,
             form.registered_residence, form.nationality
         )
+        _audit_admin_action(
+            "save_scholarship",
+            current_admin,
+            request=request,
+            resource_type="scholarship",
+            resource_id=form.scholarship_code,
+        )
         return {"status": "success", "message": f"Saved {count} chunks to Knowledge Base"}
     except Exception as e:
         logger.error(f"[Admin API] Vector DB error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Vector DB Error")
 
 @router.put("/scholarships/{scholarship_code}")
-def update_scholarship(scholarship_code: str, form: ScholarshipForm, current_admin: str = Depends(verify_admin)):
+def update_scholarship(scholarship_code: str, request: Request, form: ScholarshipForm, current_admin: str = Depends(verify_admin)):
     scholarship_code = validate_scholarship_code(scholarship_code)  # [SEC-2]
 
     # 1. Update PostgreSQL (also clear pending review state)
@@ -868,6 +979,13 @@ def update_scholarship(scholarship_code: str, form: ScholarshipForm, current_adm
             form.category, form.tags,
             form.registered_residence, form.nationality
         )
+        _audit_admin_action(
+            "update_scholarship",
+            current_admin,
+            request=request,
+            resource_type="scholarship",
+            resource_id=scholarship_code,
+        )
         return {"status": "success", "message": f"Updated {count} chunks in Knowledge Base"}
     except Exception as e:
         logger.error(f"[Admin API] Vector DB error: {e}", exc_info=True)
@@ -876,7 +994,7 @@ def update_scholarship(scholarship_code: str, form: ScholarshipForm, current_adm
 
 
 @router.delete("/scholarships/{scholarship_code}")
-def delete_scholarship(scholarship_code: str, current_admin: str = Depends(verify_admin)):
+def delete_scholarship(scholarship_code: str, request: Request, current_admin: str = Depends(verify_admin)):
     scholarship_code = validate_scholarship_code(scholarship_code)  # [SEC-2]
 
     # [OPT-4] 先刪 Milvus 向量，確認成功後再刪 PostgreSQL
@@ -899,6 +1017,13 @@ def delete_scholarship(scholarship_code: str, current_admin: str = Depends(verif
     try:
         with get_db_cursor(commit=True) as (conn, cursor):
             cursor.execute("DELETE FROM tcuscholarships WHERE scholarship_code = %s", (scholarship_code,))
+        _audit_admin_action(
+            "delete_scholarship",
+            current_admin,
+            request=request,
+            resource_type="scholarship",
+            resource_id=scholarship_code,
+        )
         return {"status": "success", "message": "Successfully deleted from Knowledge Base and DB"}
     except Exception as e:
         logger.error(f"[Admin API] delete_scholarship DB error: {e}", exc_info=True)

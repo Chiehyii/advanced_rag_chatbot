@@ -206,7 +206,14 @@ app.include_router(admin_api.router)
 async def health_check():
     """Health check endpoint for monitoring."""
     db_status = "ok" if getattr(config, 'DB_POOL', None) else "unavailable"
-    return {"status": "ok", "db": db_status}
+    rate_limit_backend = "redis" if config.RATE_LIMIT_STORAGE_URI else "memory"
+    scheduler_status = "enabled" if config.ENABLE_WEB_SCHEDULER else "disabled"
+    return {
+        "status": "ok",
+        "db": db_status,
+        "rate_limit_backend": rate_limit_backend,
+        "scheduler": scheduler_status,
+    }
 
 @app.post("/test", include_in_schema=False)
 async def test_endpoint(request: Request):
