@@ -221,6 +221,42 @@ def _subject_from_token(token: str | None, expected_type: str) -> str | None:
         return None
     return username
 
+
+def _active_subject_from_refresh_token(token: str | None) -> str | None:
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, config.JWT_SECRET_KEY, algorithms=[config.ALGORITHM])
+    except jwt.InvalidTokenError:
+        return None
+
+    username = payload.get("sub")
+    token_type = payload.get("type")
+    jti = payload.get("jti")
+    if username != config.ADMIN_USERNAME or token_type != "refresh" or not jti:
+        return None
+
+    try:
+        _ensure_auth_tables()
+        with get_db_cursor() as (conn, cursor):
+            cursor.execute(
+                """
+                SELECT 1
+                FROM admin_refresh_tokens
+                WHERE jti = %s
+                  AND token_hash = %s
+                  AND subject = %s
+                  AND revoked_at IS NULL
+                  AND expires_at > CURRENT_TIMESTAMP
+                LIMIT 1;
+                """,
+                (jti, _hash_token(token), username),
+            )
+            return username if cursor.fetchone() else None
+    except Exception as e:
+        logger.warning(f"[CSRF] Failed to verify refresh token status: {e}", exc_info=True)
+        return None
+
 def verify_admin(request: Request, token: str | None = Depends(oauth2_scheme)):
     credentials_exception = HTTPException(
         status_code=401,
@@ -556,7 +592,7 @@ async def logout(response: Response, request: Request, refresh_request: RefreshT
 def admin_csrf(response: Response, request: Request):
     username = _subject_from_token(request.cookies.get(ADMIN_ACCESS_COOKIE_NAME), "access")
     if username is None:
-        username = _subject_from_token(request.cookies.get(ADMIN_REFRESH_COOKIE_NAME), "refresh")
+        username = _active_subject_from_refresh_token(request.cookies.get(ADMIN_REFRESH_COOKIE_NAME))
     if username is None:
         raise HTTPException(status_code=401, detail="Could not validate credentials")
 

@@ -36,6 +36,8 @@ DB_PORT = os.getenv("DB_PORT", "5432")
 DB_NAME = os.getenv("DB_NAME")
 DB_USER = os.getenv("DB_USER")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
+DB_POOL_MINCONN = int(os.getenv("DB_POOL_MINCONN", "1"))
+DB_POOL_MAXCONN = int(os.getenv("DB_POOL_MAXCONN", "10"))
 
 # --- Rate Limiting ---
 RATE_LIMIT_CHAT = os.getenv("RATE_LIMIT_CHAT", "10/minute")
@@ -70,8 +72,8 @@ if not OPENAI_API_KEY or not ZILLIZ_API_KEY or not CLUSTER_ENDPOINT:
 DB_POOL = None  # 先初始化為 None，避免連線失敗時 AttributeError
 try:
     DB_POOL = pool.ThreadedConnectionPool(
-        minconn=1,
-        maxconn=20,
+        minconn=DB_POOL_MINCONN,
+        maxconn=DB_POOL_MAXCONN,
         host=DB_HOST,
         port=DB_PORT,
         dbname=DB_NAME,

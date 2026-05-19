@@ -441,6 +441,12 @@ def cleanup_qa_logs(retention_days: int | None = None):
     try:
         with get_db_cursor(commit=True) as (conn, cursor):
             cursor.execute(
+                pg_sql.SQL("CREATE INDEX IF NOT EXISTS {} ON {} (timestamp);").format(
+                    pg_sql.Identifier(f"idx_{config.DB_TABLE_NAME}_timestamp"),
+                    pg_sql.Identifier(config.DB_TABLE_NAME),
+                )
+            )
+            cursor.execute(
                 pg_sql.SQL(
                     """
                     DELETE FROM {}
