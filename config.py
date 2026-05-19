@@ -55,6 +55,7 @@ MAX_REQUEST_BODY_BYTES = int(os.getenv("MAX_REQUEST_BODY_BYTES", str(1 * 1024 * 
 CHECKPOINT_RETENTION_DAYS = int(os.getenv("CHECKPOINT_RETENTION_DAYS", "7"))
 QA_LOG_RETENTION_DAYS = int(os.getenv("QA_LOG_RETENTION_DAYS", "90"))
 SCHEDULER_LOCKS_ENABLED = os.getenv("SCHEDULER_LOCKS_ENABLED", "true").lower() == "true"
+ENABLE_WEB_SCHEDULER = os.getenv("ENABLE_WEB_SCHEDULER", "true").lower() == "true"
 
 # --- CORS ---
 CORS_ALLOWED_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000,https://tcu-scholarships-chatbot.onrender.com")

@@ -20,6 +20,7 @@ from prompts import PROMPTS
 from milvus_service import init_milvus_collection, _insert_chunks_to_milvus
 from scraper_service import _get_hash_if_url
 from db import get_db_cursor
+from extraction_schema import normalize_extracted_scholarship
 
 logger = get_logger(__name__)
 
@@ -742,10 +743,11 @@ def extract_scholarship_info(request: ExtractRequest, current_admin: str = Depen
             response_format={ "type": "json_object" }
         )
         
-        extracted_data = json.loads(response.choices[0].message.content)
-        extracted_data["scholarship_code"] = "sch-" + str(uuid.uuid4())[:8]
-        if request.url and not extracted_data.get("link"):
-            extracted_data["link"] = request.url
+        extracted_data = normalize_extracted_scholarship(
+            json.loads(response.choices[0].message.content),
+            fallback_code="sch-" + str(uuid.uuid4())[:8],
+            fallback_url=request.url,
+        )
 
         return {"status": "success", "data": extracted_data}
         

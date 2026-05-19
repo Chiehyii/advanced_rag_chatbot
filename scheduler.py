@@ -4,6 +4,7 @@ import asyncio
 import os
 from bs4 import BeautifulSoup
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from datetime import datetime, timezone
 import config
@@ -16,6 +17,7 @@ from prompts import PROMPTS
 from admin_api import openai_client
 from milvus_service import init_milvus_collection, emb_texts_batch
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from extraction_schema import normalize_extracted_scholarship
 
 logger = get_logger(__name__)
 
@@ -241,8 +243,11 @@ def process_scholarship_update(row, new_hash, new_text):
         logger.warning(f"[Scheduler] AI extraction returned empty for {title}, skipping.")
         return False
 
-    extracted_data['link'] = url
-    extracted_data['scholarship_code'] = scholarship_code
+    extracted_data = normalize_extracted_scholarship(
+        extracted_data,
+        fallback_code=scholarship_code,
+        fallback_url=url,
+    )
 
     # 防呆：確保字串欄位不為 dict/list
     for field in ['title', 'category', 'amount_summary', 'description', 'application_date_text', 'contact', 'markdown_content']:
@@ -460,8 +465,7 @@ def cleanup_qa_logs(retention_days: int | None = None):
         logger.warning(f"[QA Log Cleanup] Failed: {e}", exc_info=True)
 
 
-def start_scheduler():
-    scheduler = BackgroundScheduler()
+def _add_scheduler_jobs(scheduler):
     # Run every 24 hours
     scheduler.add_job(run_inspection_once, IntervalTrigger(hours=24), id='scholarship_inspection')
     scheduler.add_job(
@@ -478,10 +482,25 @@ def start_scheduler():
         replace_existing=True,
         next_run_time=datetime.now(timezone.utc),
     )
+    return scheduler
+
+
+def start_scheduler():
+    scheduler = _add_scheduler_jobs(BackgroundScheduler())
     scheduler.start()
     logger.info("[Scheduler] Started background automated inspection and checkpoint cleanup.")
+    return scheduler
+
+
+def start_scheduler_worker():
+    scheduler = _add_scheduler_jobs(BlockingScheduler())
+    logger.info("[Scheduler] Starting standalone scheduler worker.")
+    scheduler.start()
 
 if __name__ == "__main__":
     # 允許您直接執行 `python scheduler.py` 進行手動測試
-    logger.info("[Scheduler] Manual execution triggered.")
-    run_inspection()
+    if os.getenv("SCHEDULER_WORKER", "false").lower() == "true":
+        start_scheduler_worker()
+    else:
+        logger.info("[Scheduler] Manual execution triggered.")
+        run_inspection_once()

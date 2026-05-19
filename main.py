@@ -62,7 +62,10 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 async def lifespan(app: FastAPI):
     from agent.graph import init_postgres_checkpointer, close_postgres_checkpointer
     await init_postgres_checkpointer()
-    start_scheduler()
+    if config.ENABLE_WEB_SCHEDULER:
+        start_scheduler()
+    else:
+        logger.info("[Scheduler] Web scheduler disabled by ENABLE_WEB_SCHEDULER=false.")
     yield
     await close_postgres_checkpointer()
 
