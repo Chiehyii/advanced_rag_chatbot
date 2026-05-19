@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { apiExtractInfo } from './api';
-import { Scholarship } from './types';
+import { Scholarship, getErrorMessage, isUnauthorizedError } from './types';
 import './admin.css';
 interface ExtractionSectionProps {
     onExtracted: (data: Scholarship) => void;
@@ -23,9 +23,9 @@ export function ExtractionSection({ onExtracted, onUnauthorized, onToast, urlRef
             urlRef.current = url.trim();
             onExtracted(data);
             onToast('✨ AI 分析完成！', 'success');
-        } catch (err: any) {
-            if (err.message === 'UNAUTHORIZED') { onUnauthorized(); return; }
-            onToast(err.message, 'error');
+        } catch (err: unknown) {
+            if (isUnauthorizedError(err)) { onUnauthorized(); return; }
+            onToast(getErrorMessage(err), 'error');
         } finally {
             setLoading(false);
         }

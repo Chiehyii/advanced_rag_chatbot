@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { X } from 'lucide-react';
 import { Language, ScholarshipListItem, ScholarshipTag } from '../types';
-import { translations } from '../App';
+import { translations } from '../translations';
 
 interface MetadataSchema {
   identity: string[];

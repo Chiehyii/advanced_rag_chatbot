@@ -8,6 +8,7 @@ import { DesktopSidebar } from './components/DesktopSidebar';
 import { OnboardingTour, TourStep } from './components/OnboardingTour';
 import { Trash2 } from 'lucide-react';
 import { Message, Language, ScholarshipTag, Theme } from './types';
+import { translations } from './translations';
 import './index.css';
 
 const AdminApp = React.lazy(() => import('./admin/AdminApp').then(module => ({ default: module.AdminApp })));
@@ -17,137 +18,6 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || '';
 const MAX_HISTORY_MESSAGES = 20;
 const MAX_HISTORY_CONTENT_LENGTH = 2000;
 
-// --- i18n Dictionaries ---
-export const translations = {
-  zh: {
-    welcome_title: "你好！想了解哪些獎助學金？",
-    title: "獎助學金問答",
-    input_placeholder: "請在這裡輸入您的問題...",
-    send_button_title: "Send",
-    clear_chat_button: "清除對話",
-    help_button: "幫助",
-    feedback_title: "提供你的意見",
-    feedback_prompt: "請告訴我們這個回答哪裡不符合你的預期，以幫助我們提升服務品質！",
-    feedback_placeholder: "例如：答案不正確、資訊不完整、與問題無關...",
-    cancel_button: "取消",
-    submit_button: "送出",
-    initial_bot_message: "你好！我是慈濟大學獎助學金問答助理，請問有什麼可以幫助您的嗎？",
-    error_message: "抱歉，連線時發生錯誤，請稍後再試。",
-    example_question_1: "提供給五專生原住民的獎助學金有哪些?",
-    example_question_2: "申請校內工讀需要具備甚麼條件?",
-    example_question_3: "家庭意外補助",
-    example_question_4: "低收入可以申請甚麼?",
-    example_question_5: "大三下要到海外交流和志工服務, 學校有提供甚麼補助嗎?",
-    example_question_6: "學校有提供證照獎勵補助嗎?",
-    example_question_7: "就學貸款辦理資訊",
-    example_question_8: "碩士班外籍生可以申請獎助學金嗎？",
-    example_question_9: "學術論文/期刊發表有甚麼補助?",
-    example_question_10: "校外競賽獎勵",
-    example_question_11: "大學部原住民可以申請甚麼獎助學金?",
-    example_question_12: "弱勢助學",
-    reference_title: "來源：",
-    unknown_source: "未知來源",
-    chat_notice: "AI回答可能會出錯，請查證回覆內容。",
-    clear_chat_button_title: "Clear Chat",
-    help_button_title: "Help",
-    help_alert: "系統問題請聯絡: \n\n校務研究中心 資料庫組\n電話: (03)856-5301 ext.11148\n信箱: chiehyi@gms.tcu.edu.tw",
-    homepage_button: "首頁",
-    show_more: "顯示全部",
-    show_less: "收起",
-    filter_title: "獎學金篩選",
-    filter_category: "類別",
-    filter_tags: "條件",
-    filter_all: "全部",
-    filter_results: "篩選結果",
-    filter_results_unit: "筆",
-    filter_max_hint: "已達上限 3 個",
-    filter_loading: "載入中...",
-    filter_empty: "沒有符合的結果",
-    filter_remove_tag: "移除",
-    tour_button: "使用說明",
-    tour_step_sidebar_title: "📌 側邊選單",
-    tour_step_sidebar_desc: "這裡可以前往衣珠專案首頁、切換語言（中文／English），以及聯繫系統管理員取得技術支援。",
-    tour_step_input_title: "💬 提問輸入框",
-    tour_step_input_desc: "在這裡輸入您的問題，按 Enter 或點右側送出按鈕即可發送。支援 Shift + Enter 換行。",
-    tour_step_filter_title: "🎯 獎學金篩選",
-    tour_step_filter_desc: "點擊「＋」按鈕可開啟獎學金篩選器，選擇特定獎學金後，系統會更精準地回答相關問題（最多可選 3 個）。",
-    tour_step_examples_title: "💡 範例問題",
-    tour_step_examples_desc: "不知道怎麼問？直接點擊預設問題，即可快速開始對話！",
-    tour_step_clear_title: "🗑️ 清除對話",
-    tour_step_clear_desc: "點擊此按鈕可清除所有聊天紀錄，重新開始新的對話。",
-    tour_step_response_title: "🤖 AI 回答",
-    tour_step_response_desc: "AI 回答將顯示於此。點擊回答中的引用標記[1][2]可查看來源資訊；下方書本圖示可開啟來源列表。您也可以對回答提供回饋。",
-    settings_button: "設定",
-    theme_title: "主題",
-    theme_system: "預設",
-    theme_light: "亮色",
-    theme_dark: "暗色"
-  },
-  en: {
-    welcome_title: "Hi! Ask me about scholarships!",
-    title: "Scholarship Chat",
-    input_placeholder: "Please enter your question here...",
-    send_button_title: "Send",
-    clear_chat_button: "Clear Chat",
-    help_button: "Help",
-    feedback_title: "Provide your feedback",
-    feedback_prompt: "Please let us know where this answer did not meet your expectations to help us improve our service quality!",
-    feedback_placeholder: "For example: The answer is incorrect, the information is incomplete, it is not relevant to the question...",
-    cancel_button: "Cancel",
-    submit_button: "Submit",
-    initial_bot_message: "Hello! I am the Tzu Chi University Scholarship Q&A Assistant. How can I help you?",
-    error_message: "Sorry, an error occurred while connecting. Please try again later.",
-    example_question_1: "What scholarships are available for aboriginal students in the five-year junior college program?",
-    example_question_2: "What are the eligibility requirements for TCU work-study?",
-    example_question_3: "Family accident subsidy",
-    example_question_4: "What subsidies can low-income households apply for?",
-    example_question_5: "I am going on an overseas exchange and volunteer service in the second semester of my junior year. Does the school offer any subsidies?",
-    example_question_6: "Does the school offer certification or license incentives?",
-    example_question_7: "Student loan application information",
-    example_question_8: "Can international students in master's programs apply for scholarships?",
-    example_question_9: "What subsidies are available for academic paper/journal publication?",
-    example_question_10: "Scholarships for participating in external competitions",
-    example_question_11: "What scholarships are available for aboriginal students in the undergraduate level?",
-    example_question_12: "Grants for Disadvantaged Students",
-    reference_title: "References:",
-    unknown_source: "Unknown source",
-    chat_notice: "AI chat may produce errors, please verify the responses.",
-    clear_chat_button_title: "Clear Chat",
-    help_button_title: "Help",
-    help_alert: "For system issues, please contact:\n\nInstitutional Research Office, Database Division\nTel: (03)856-5301 ext.11148\nEmail: chiehyi@gms.tcu.edu.tw",
-    homepage_button: "Homepage",
-    show_more: "Show all",
-    show_less: "Show less",
-    filter_title: "Scholarship Filter",
-    filter_category: "Category",
-    filter_tags: "Category",
-    filter_all: "All",
-    filter_results: "Results",
-    filter_results_unit: "items",
-    filter_max_hint: "Max 3 reached",
-    filter_loading: "Loading...",
-    filter_empty: "No matching results",
-    filter_remove_tag: "Remove",
-    tour_button: "User Guide",
-    tour_step_sidebar_title: "📌 Sidebar Menu",
-    tour_step_sidebar_desc: "Navigate to the Yizhu homepage, switch between Chinese and English, or contact the system administrator for support.",
-    tour_step_input_title: "💬 Chat Input",
-    tour_step_input_desc: "Type your question here, then press Enter or click the send button to submit. Shift + Enter is supported for line breaks.",
-    tour_step_filter_title: "🎯 Scholarship Filter",
-    tour_step_filter_desc: "Click the “＋” button to open the scholarship filter. Selecting specific scholarships helps the system provide more accurate answers (up to 3 selections).",
-    tour_step_examples_title: "💡 Example Questions",
-    tour_step_examples_desc: "Not sure what to ask? Click one of the preset questions to quickly start a conversation.",
-    tour_step_clear_title: "🗑️ Clear Chat",
-    tour_step_clear_desc: "Click this button to clear all chat history and start a new conversation.",
-    tour_step_response_title: "🤖 AI Response",
-    tour_step_response_desc: "AI responses appear here. Citation markers such as [1][2] are clickable to view source information, and the book icon below can be used to open the source list. You can also provide feedback on each response.",
-    settings_button: "Settings",
-    theme_title: "Theme",
-    theme_system: "System",
-    theme_light: "Light",
-    theme_dark: "Dark"
-  }
-};
 function App() {
   const [messages, setMessages] = useState<Message[]>(() => {
     try {
@@ -482,7 +352,8 @@ function App() {
                   type="button"
                   className="header-icon-btn clear-chat-btn"
                   onClick={handleClearChat}
-                  title={t.clear_chat_button_title || t.clear_chat_button}
+                  title={t.clear_chat_button_title}
+                  aria-label={t.clear_chat_button_title}
                 >
                   <Trash2 size={20} strokeWidth={1.5} />
                 </button>

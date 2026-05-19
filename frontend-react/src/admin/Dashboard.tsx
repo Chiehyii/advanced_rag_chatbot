@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { apiGetDashboardSummary, apiGetDashboardTrends, apiGetDashboardRecent } from './api';
+import { isUnauthorizedError } from './types';
 import {
     LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
     Tooltip, Legend, ResponsiveContainer
@@ -72,8 +73,8 @@ export function Dashboard({ onUnauthorized }: DashboardProps) {
             setSummary(s);
             setTrends(t);
             setRecent(r);
-        } catch (err: any) {
-            if (err.message === 'UNAUTHORIZED') onUnauthorized();
+        } catch (err: unknown) {
+            if (isUnauthorizedError(err)) onUnauthorized();
         } finally {
             setLoading(false);
         }
@@ -86,8 +87,8 @@ export function Dashboard({ onUnauthorized }: DashboardProps) {
         try {
             const t = await apiGetDashboardTrends(s, e);
             setTrends(t);
-        } catch (err: any) {
-            if (err.message === 'UNAUTHORIZED') onUnauthorized();
+        } catch (err: unknown) {
+            if (isUnauthorizedError(err)) onUnauthorized();
         }
     }, [onUnauthorized]);
 
@@ -286,7 +287,7 @@ export function Dashboard({ onUnauthorized }: DashboardProps) {
                             <YAxis tick={{ fontSize: 12 }} />
                             <Tooltip
                                 contentStyle={{ borderRadius: 10, border: 'none', boxShadow: '0 4px 16px rgba(0,0,0,0.12)' }}
-                                formatter={(value: number | string | any) => [Number(value || 0).toLocaleString(), 'Tokens']}
+                                formatter={(value: unknown) => [Number(value || 0).toLocaleString(), 'Tokens']}
                             />
                             <Bar dataKey="Tokens" fill="url(#tokenGradient)" radius={[6, 6, 0, 0]} />
                             <defs>

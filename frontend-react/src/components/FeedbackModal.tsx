@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Language } from '../types';
-import { translations } from '../App';
+import { translations } from '../translations';
 
 interface FeedbackModalProps {
   isOpen: boolean;

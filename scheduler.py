@@ -4,23 +4,91 @@ import asyncio
 import os
 from bs4 import BeautifulSoup
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from datetime import datetime, timezone
 import config
 from db import get_db_cursor
 from utils import FetchSSLError, UnsafeUrlError, safe_fetch_text_async
 from logger import get_logger
+from psycopg2 import sql as pg_sql
 from notifier import send_line_message
 from prompts import PROMPTS
 from admin_api import openai_client
 from milvus_service import init_milvus_collection, emb_texts_batch
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from extraction_schema import normalize_extracted_scholarship
 
 logger = get_logger(__name__)
 
 EXTRACTION_MAX_COMPLETION_TOKENS = int(os.getenv("EXTRACTION_MAX_COMPLETION_TOKENS", "4000"))
 EXTRACTION_RETRY_MAX_COMPLETION_TOKENS = int(os.getenv("EXTRACTION_RETRY_MAX_COMPLETION_TOKENS", "6000"))
 CHECKPOINT_CLEANUP_INTERVAL_HOURS = int(os.getenv("CHECKPOINT_CLEANUP_INTERVAL_HOURS", "24"))
+SCHOLARSHIP_INSPECTION_LOCK_ID = 771001
+CHECKPOINT_CLEANUP_LOCK_ID = 771002
+QA_LOG_CLEANUP_LOCK_ID = 771003
+
+
+def _run_with_advisory_lock(lock_id: int, job_name: str, func, *args, **kwargs):
+    """Run one scheduler job at a time across Uvicorn workers/instances."""
+    if not getattr(config, "SCHEDULER_LOCKS_ENABLED", True):
+        return func(*args, **kwargs)
+
+    if not config.DB_POOL:
+        logger.warning(f"[Scheduler] DB pool unavailable; running {job_name} without advisory lock.")
+        return func(*args, **kwargs)
+
+    conn = None
+    cursor = None
+    locked = False
+    try:
+        conn = config.DB_POOL.getconn()
+        cursor = conn.cursor()
+        cursor.execute("SELECT pg_try_advisory_lock(%s);", (lock_id,))
+        locked = bool(cursor.fetchone()[0])
+        if not locked:
+            logger.info(f"[Scheduler] Skipping {job_name}; another worker holds the advisory lock.")
+            return None
+
+        logger.info(f"[Scheduler] Acquired advisory lock for {job_name}.")
+        return func(*args, **kwargs)
+    except Exception as e:
+        logger.error(f"[Scheduler] Failed while running locked job {job_name}: {e}", exc_info=True)
+        return None
+    finally:
+        if cursor:
+            try:
+                if locked:
+                    cursor.execute("SELECT pg_advisory_unlock(%s);", (lock_id,))
+            except Exception as e:
+                logger.warning(f"[Scheduler] Failed to release advisory lock for {job_name}: {e}")
+            cursor.close()
+        if conn:
+            config.DB_POOL.putconn(conn)
+
+
+def run_inspection_once():
+    return _run_with_advisory_lock(
+        SCHOLARSHIP_INSPECTION_LOCK_ID,
+        "scholarship_inspection",
+        run_inspection,
+    )
+
+
+def cleanup_langgraph_checkpoints_once():
+    return _run_with_advisory_lock(
+        CHECKPOINT_CLEANUP_LOCK_ID,
+        "langgraph_checkpoint_cleanup",
+        cleanup_langgraph_checkpoints,
+    )
+
+
+def cleanup_qa_logs_once():
+    return _run_with_advisory_lock(
+        QA_LOG_CLEANUP_LOCK_ID,
+        "qa_log_cleanup",
+        cleanup_qa_logs,
+    )
 
 
 def compute_md5(text: str) -> str:
@@ -175,8 +243,11 @@ def process_scholarship_update(row, new_hash, new_text):
         logger.warning(f"[Scheduler] AI extraction returned empty for {title}, skipping.")
         return False
 
-    extracted_data['link'] = url
-    extracted_data['scholarship_code'] = scholarship_code
+    extracted_data = normalize_extracted_scholarship(
+        extracted_data,
+        fallback_code=scholarship_code,
+        fallback_url=url,
+    )
 
     # 防呆：確保字串欄位不為 dict/list
     for field in ['title', 'category', 'amount_summary', 'description', 'application_date_text', 'contact', 'markdown_content']:
@@ -363,21 +434,73 @@ def cleanup_langgraph_checkpoints(retention_days: int | None = None):
         logger.warning(f"[Checkpoint Cleanup] Failed: {e}", exc_info=True)
 
 
-def start_scheduler():
-    scheduler = BackgroundScheduler()
+def cleanup_qa_logs(retention_days: int | None = None):
+    """Delete old chat QA logs to reduce retained user data."""
+    retention_days = retention_days if retention_days is not None else config.QA_LOG_RETENTION_DAYS
+    if retention_days <= 0:
+        logger.info("[QA Log Cleanup] Disabled because retention_days <= 0.")
+        return
+
+    logger.info(f"[QA Log Cleanup] Removing QA logs older than {retention_days} days.")
+
+    try:
+        with get_db_cursor(commit=True) as (conn, cursor):
+            cursor.execute(
+                pg_sql.SQL("CREATE INDEX IF NOT EXISTS {} ON {} (timestamp);").format(
+                    pg_sql.Identifier(f"idx_{config.DB_TABLE_NAME}_timestamp"),
+                    pg_sql.Identifier(config.DB_TABLE_NAME),
+                )
+            )
+            cursor.execute(
+                pg_sql.SQL(
+                    """
+                    DELETE FROM {}
+                    WHERE timestamp < NOW() - %s::interval;
+                    """
+                ).format(pg_sql.Identifier(config.DB_TABLE_NAME)),
+                (f"{int(retention_days)} days",),
+            )
+            logger.info(f"[QA Log Cleanup] Deleted qa_logs={cursor.rowcount}.")
+    except Exception as e:
+        logger.warning(f"[QA Log Cleanup] Failed: {e}", exc_info=True)
+
+
+def _add_scheduler_jobs(scheduler):
     # Run every 24 hours
-    scheduler.add_job(run_inspection, IntervalTrigger(hours=24), id='scholarship_inspection')
+    scheduler.add_job(run_inspection_once, IntervalTrigger(hours=24), id='scholarship_inspection')
     scheduler.add_job(
-        cleanup_langgraph_checkpoints,
+        cleanup_langgraph_checkpoints_once,
         IntervalTrigger(hours=CHECKPOINT_CLEANUP_INTERVAL_HOURS),
         id='langgraph_checkpoint_cleanup',
         replace_existing=True,
         next_run_time=datetime.now(timezone.utc),
     )
+    scheduler.add_job(
+        cleanup_qa_logs_once,
+        IntervalTrigger(hours=CHECKPOINT_CLEANUP_INTERVAL_HOURS),
+        id='qa_log_cleanup',
+        replace_existing=True,
+        next_run_time=datetime.now(timezone.utc),
+    )
+    return scheduler
+
+
+def start_scheduler():
+    scheduler = _add_scheduler_jobs(BackgroundScheduler())
     scheduler.start()
     logger.info("[Scheduler] Started background automated inspection and checkpoint cleanup.")
+    return scheduler
+
+
+def start_scheduler_worker():
+    scheduler = _add_scheduler_jobs(BlockingScheduler())
+    logger.info("[Scheduler] Starting standalone scheduler worker.")
+    scheduler.start()
 
 if __name__ == "__main__":
     # 允許您直接執行 `python scheduler.py` 進行手動測試
-    logger.info("[Scheduler] Manual execution triggered.")
-    run_inspection()
+    if os.getenv("SCHEDULER_WORKER", "false").lower() == "true":
+        start_scheduler_worker()
+    else:
+        logger.info("[Scheduler] Manual execution triggered.")
+        run_inspection_once()

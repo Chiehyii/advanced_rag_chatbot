@@ -26,3 +26,11 @@ export interface MetadataSchema {
     nationality: string[];
 }
 export type AdminMode = 'CREATE' | 'UPDATE';
+
+export const getErrorMessage = (err: unknown): string => {
+    return err instanceof Error ? err.message : String(err);
+};
+
+export const isUnauthorizedError = (err: unknown): boolean => {
+    return err instanceof Error && err.message === 'UNAUTHORIZED';
+};

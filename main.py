@@ -41,7 +41,11 @@ def _get_real_ip(request: Request) -> str:
         return forwarded_for.split(",")[-1].strip()
     return request.client.host if request.client else "127.0.0.1"
 
-limiter = Limiter(key_func=_get_real_ip)
+limiter = Limiter(
+    key_func=_get_real_ip,
+    storage_uri=config.RATE_LIMIT_STORAGE_URI,
+    headers_enabled=True,
+)
 
 # 簡單記憶體快取，用於 filter_scholarships (10分鐘 TTL)
 _scholarship_cache = {"data": None, "timestamp": 0}
@@ -58,7 +62,10 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 async def lifespan(app: FastAPI):
     from agent.graph import init_postgres_checkpointer, close_postgres_checkpointer
     await init_postgres_checkpointer()
-    start_scheduler()
+    if config.ENABLE_WEB_SCHEDULER:
+        start_scheduler()
+    else:
+        logger.info("[Scheduler] Web scheduler disabled by ENABLE_WEB_SCHEDULER=false.")
     yield
     await close_postgres_checkpointer()
 
@@ -85,7 +92,7 @@ app.add_middleware(
     allow_origins=config.ALLOWED_ORIGINS_LIST,  # Use the allowlist from config
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "Accept", "X-Request-ID", "X-Requested-With"],
+    allow_headers=["Content-Type", "Authorization", "Accept", "X-Request-ID", "X-Requested-With", "X-CSRF-Token"],
     expose_headers=["X-Chat-Session-Token"],
 )
 app.add_middleware(RequestBodyLimitMiddleware, max_body_size=config.MAX_REQUEST_BODY_BYTES)
@@ -199,7 +206,14 @@ app.include_router(admin_api.router)
 async def health_check():
     """Health check endpoint for monitoring."""
     db_status = "ok" if getattr(config, 'DB_POOL', None) else "unavailable"
-    return {"status": "ok", "db": db_status}
+    rate_limit_backend = "redis" if config.RATE_LIMIT_STORAGE_URI else "memory"
+    scheduler_status = "enabled" if config.ENABLE_WEB_SCHEDULER else "disabled"
+    return {
+        "status": "ok",
+        "db": db_status,
+        "rate_limit_backend": rate_limit_backend,
+        "scheduler": scheduler_status,
+    }
 
 @app.post("/test", include_in_schema=False)
 async def test_endpoint(request: Request):

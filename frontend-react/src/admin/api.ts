@@ -1,24 +1,80 @@
 import { Scholarship } from './types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '';
+const CSRF_STORAGE_KEY = 'tcu_admin_csrf_token';
+
+function getStoredCsrfToken(): string {
+    return sessionStorage.getItem(CSRF_STORAGE_KEY) || '';
+}
+
+function storeCsrfToken(token: string | null | undefined): void {
+    if (token) {
+        sessionStorage.setItem(CSRF_STORAGE_KEY, token);
+    }
+}
+
+async function storeCsrfTokenFromResponse(res: Response): Promise<void> {
+    try {
+        const contentType = res.headers.get('content-type') || '';
+        if (!contentType.includes('application/json')) return;
+        const body = await res.clone().json();
+        storeCsrfToken(body?.csrf_token);
+    } catch {
+        // Response bodies are best-effort for CSRF rotation.
+    }
+}
+
+async function ensureCsrfToken(force = false): Promise<string> {
+    const current = getStoredCsrfToken();
+    if (current && !force) return current;
+
+    const res = await fetch(`${API_BASE_URL}/api/csrf`, {
+        method: 'GET',
+        credentials: 'include',
+    });
+    if (!res.ok) return '';
+
+    await storeCsrfTokenFromResponse(res);
+    return getStoredCsrfToken();
+}
+
+function isUnsafeMethod(method: string | undefined): boolean {
+    const normalized = (method || 'GET').toUpperCase();
+    return !['GET', 'HEAD', 'OPTIONS'].includes(normalized);
+}
 
 export async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
     const headers = new Headers(options.headers);
     headers.set('X-Requested-With', 'XMLHttpRequest');
+    if (isUnsafeMethod(options.method)) {
+        const csrfToken = await ensureCsrfToken();
+        if (csrfToken) headers.set('X-CSRF-Token', csrfToken);
+    }
     const fullUrl = url.startsWith('/') ? `${API_BASE_URL}${url}` : url;
 
     let res = await fetch(fullUrl, { ...options, headers, credentials: 'include' });
+    await storeCsrfTokenFromResponse(res);
 
     if (res.status === 401) {
         try {
+            const csrfToken = await ensureCsrfToken(true);
             const refreshRes = await fetch(`${API_BASE_URL}/api/refresh`, {
                 method: 'POST',
                 credentials: 'include',
-                headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest',
+                    ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
+                },
             });
+            await storeCsrfTokenFromResponse(refreshRes);
 
             if (refreshRes.ok) {
+                if (isUnsafeMethod(options.method)) {
+                    const refreshedCsrfToken = getStoredCsrfToken();
+                    if (refreshedCsrfToken) headers.set('X-CSRF-Token', refreshedCsrfToken);
+                }
                 res = await fetch(fullUrl, { ...options, headers, credentials: 'include' });
+                await storeCsrfTokenFromResponse(res);
             }
         } catch (err) {
             console.error("Refresh token failed", err);
@@ -38,6 +94,7 @@ export async function apiLogin(username: string, password: string): Promise<void
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: formData,
     });
+    await storeCsrfTokenFromResponse(res);
     if (!res.ok) throw new Error('Login failed');
 }
 
@@ -48,6 +105,7 @@ export async function apiCheckAuth(): Promise<boolean> {
 
 export async function apiLogout(): Promise<void> {
     await authFetch('/api/logout', { method: 'POST' }).catch(() => undefined);
+    sessionStorage.removeItem(CSRF_STORAGE_KEY);
 }
 
 export async function apiListScholarships(): Promise<Scholarship[]> {

@@ -172,27 +172,27 @@ export const OnboardingTour: React.FC<OnboardingTourProps> = ({
     return () => cancelAnimationFrame(raf);
   }, [targetRect, isOpen, currentStep, visibleSteps]);
 
-  const goToStep = (idx: number) => {
+  const goToStep = useCallback((idx: number) => {
     setIsAnimating(true);
     setTimeout(() => {
       setCurrentStep(idx);
       setIsAnimating(false);
     }, 200);
-  };
+  }, []);
 
-  const handleNext = () => {
+  const handleNext = useCallback(() => {
     if (currentStep < visibleSteps.length - 1) {
       goToStep(currentStep + 1);
     } else {
       onClose();
     }
-  };
+  }, [currentStep, goToStep, onClose, visibleSteps.length]);
 
-  const handlePrev = () => {
+  const handlePrev = useCallback(() => {
     if (currentStep > 0) {
       goToStep(currentStep - 1);
     }
-  };
+  }, [currentStep, goToStep]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
@@ -201,7 +201,7 @@ export const OnboardingTour: React.FC<OnboardingTourProps> = ({
       if (e.key === 'ArrowRight') handleNext();
       if (e.key === 'ArrowLeft') handlePrev();
     },
-    [isOpen, currentStep, visibleSteps.length]
+    [handleNext, handlePrev, isOpen, onClose]
   );
 
   useEffect(() => {

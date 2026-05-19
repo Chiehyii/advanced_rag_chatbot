@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { marked } from 'marked';
-import { BookOpen, ChevronDown, ChevronRight, Globe, Loader2, ThumbsDown, ThumbsUp } from 'lucide-react';
+import type { Token, Tokens } from 'marked';
+import { BookOpen, Check, ChevronDown, ChevronRight, Clipboard, Globe, Loader2, ThumbsDown, ThumbsUp } from 'lucide-react';
 import { Language, Message } from '../types';
-import { translations } from '../App';
+import { translations } from '../translations';
 
 interface MessageBubbleProps {
   message: Message;
@@ -22,6 +23,18 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
   const [feedbackState, setFeedbackState] = useState<'like' | 'dislike' | null>(null);
   const [isMobileExpanded, setIsMobileExpanded] = useState(false);
   const [isThinkingCollapsed, setIsThinkingCollapsed] = useState(true);
+  const [isCopied, setIsCopied] = useState(false);
+  const copyResetTimerRef = useRef<number | null>(null);
+  const isLiked = feedbackState === 'like';
+  const isDisliked = feedbackState === 'dislike';
+
+  useEffect(() => {
+    return () => {
+      if (copyResetTimerRef.current !== null) {
+        window.clearTimeout(copyResetTimerRef.current);
+      }
+    };
+  }, []);
 
   const sanitizeUrl = (raw: string | undefined | null): string => {
     if (!raw || raw === '#') return '#';
@@ -66,7 +79,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
 
   const renderInline = (text: string, keyPrefix: string, ctxs: ContextLike[], options: { showCitationTooltip?: boolean } = {}): React.ReactNode[] => {
     const nodes: React.ReactNode[] = [];
-    const pattern = /(\[(\d+)\]|\[([^\]]+)\]\(([^)]+)\)|`([^`]+)`|\*\*([^*]+)\*\*)/g;
+    const pattern = /(\[(\d+)\]|\[([^\]]+)\]\(([^)]+)\)|`([^`]+)`|\*\*([^*]+)\*\*|<br\s*\/?>)/gi;
     let lastIndex = 0;
     let match: RegExpExecArray | null;
 
@@ -89,6 +102,8 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
         nodes.push(<code key={key}>{match[5]}</code>);
       } else if (match[6]) {
         nodes.push(<strong key={key}>{match[6]}</strong>);
+      } else if (match[0].toLowerCase().startsWith('<br')) {
+        nodes.push(<br key={key} />);
       }
 
       lastIndex = pattern.lastIndex;
@@ -168,15 +183,21 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
     }).join('\n');
   };
 
-  const getTableCellText = (cell: any): string => {
+  const getTableCellText = (cell: Tokens.TableCell | string): string => {
     if (typeof cell === 'string') return cell;
-    return cell?.text || cell?.raw || '';
+    return cell.text || '';
+  };
+
+  const getTableTextAlign = (
+    align: Tokens.Table['align'][number] | undefined
+  ): React.CSSProperties['textAlign'] => {
+    return align || undefined;
   };
 
   const renderMarkdown = (text: string, ctxs: ContextLike[]) => {
-    const tokens = marked.lexer(normalizeMarkdownTables(text), { gfm: true, breaks: true }) as any[];
+    const tokens = marked.lexer(normalizeMarkdownTables(text), { gfm: true, breaks: true });
 
-    return tokens.map((token, idx) => {
+    return tokens.map((token: Token, idx: number) => {
       const key = `md-${idx}`;
 
       if (token.type === 'heading') {
@@ -192,8 +213,8 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
         const ListTag = token.ordered ? 'ol' : 'ul';
         return (
           <ListTag key={key}>
-            {(token.items || []).map((item: any, itemIdx: number) => (
-              <li key={`${key}-item-${itemIdx}`}>{renderInline(item.text || '', `${key}-item-${itemIdx}`, ctxs)}</li>
+            {token.items.map((item: Tokens.ListItem, itemIdx: number) => (
+              <li key={`${key}-item-${itemIdx}`}>{renderInline(item.text, `${key}-item-${itemIdx}`, ctxs)}</li>
             ))}
           </ListTag>
         );
@@ -205,18 +226,18 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
             <table>
               <thead>
                 <tr>
-                  {(token.header || []).map((cell: any, cellIdx: number) => (
-                    <th key={`${key}-head-${cellIdx}`} style={{ textAlign: token.align?.[cellIdx] || undefined }}>
+                  {token.header.map((cell: Tokens.TableCell, cellIdx: number) => (
+                    <th key={`${key}-head-${cellIdx}`} style={{ textAlign: getTableTextAlign(token.align[cellIdx]) }}>
                       {renderInline(getTableCellText(cell), `${key}-head-${cellIdx}`, ctxs, { showCitationTooltip: false })}
                     </th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {(token.rows || []).map((row: any[], rowIdx: number) => (
+                {token.rows.map((row: Tokens.TableCell[], rowIdx: number) => (
                   <tr key={`${key}-row-${rowIdx}`}>
-                    {row.map((cell: any, cellIdx: number) => (
-                      <td key={`${key}-cell-${rowIdx}-${cellIdx}`} style={{ textAlign: token.align?.[cellIdx] || undefined }}>
+                    {row.map((cell: Tokens.TableCell, cellIdx: number) => (
+                      <td key={`${key}-cell-${rowIdx}-${cellIdx}`} style={{ textAlign: getTableTextAlign(token.align[cellIdx]) }}>
                         {renderInline(getTableCellText(cell), `${key}-cell-${rowIdx}-${cellIdx}`, ctxs, { showCitationTooltip: false })}
                       </td>
                     ))}
@@ -242,8 +263,41 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
 
       if (token.type === 'space') return null;
 
-      return <p key={key}>{renderInline(token.raw || token.text || '', key, ctxs)}</p>;
+      return <p key={key}>{renderInline(token.raw || '', key, ctxs)}</p>;
     });
+  };
+
+  const copyText = async (text: string) => {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.top = '-9999px';
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textarea);
+  };
+
+  const handleCopyResponse = async () => {
+    try {
+      await copyText(content);
+      setIsCopied(true);
+      if (copyResetTimerRef.current !== null) {
+        window.clearTimeout(copyResetTimerRef.current);
+      }
+      copyResetTimerRef.current = window.setTimeout(() => {
+        setIsCopied(false);
+        copyResetTimerRef.current = null;
+      }, 1800);
+    } catch (error) {
+      console.error('Failed to copy response:', error);
+    }
   };
 
   if (role === 'user') {
@@ -289,35 +343,54 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onFeedbac
               {content && <div>{renderMarkdown(content, contexts || [])}</div>}
             </div>
 
-            {logId && feedbackToken && !isStreaming && (
+            {content.trim() && !isStreaming && (
               <div className="feedback-buttons">
+                {logId && feedbackToken && (
+                  <>
+                    <button
+                      className={`feedback-btn like-btn ${isLiked ? 'active' : ''}`}
+                      onClick={() => {
+                        const newState = isLiked ? null : 'like';
+                        setFeedbackState(newState);
+                        onFeedback(logId, feedbackToken, newState);
+                      }}
+                      title={t.satisfied_title}
+                      aria-label={t.satisfied_title}
+                    >
+                      <ThumbsUp size={16} color={isLiked ? 'var(--link-color)' : '#adb1b9'} strokeWidth={1.7} />
+                    </button>
+                    <button
+                      className={`feedback-btn dislike-btn ${isDisliked ? 'active' : ''}`}
+                      onClick={() => {
+                        const newState = isDisliked ? null : 'dislike';
+                        setFeedbackState(newState);
+                        onFeedback(logId, feedbackToken, newState);
+                      }}
+                      title={t.dissatisfied_title}
+                      aria-label={t.dissatisfied_title}
+                    >
+                      <ThumbsDown size={16} color={isDisliked ? '#ea4335' : '#adb1b9'} strokeWidth={1.7} />
+                    </button>
+                  </>
+                )}
                 <button
-                  className={`feedback-btn like-btn ${feedbackState === 'like' ? 'active' : ''}`}
-                  onClick={() => {
-                    const newState = feedbackState === 'like' ? null : 'like';
-                    setFeedbackState(newState);
-                    onFeedback(logId, feedbackToken, newState);
-                  }}
-                  title="Satisfied"
+                  className={`feedback-btn copy-response-btn ${isCopied ? 'copied' : ''}`}
+                  onClick={handleCopyResponse}
+                  title={isCopied ? t.copied_response_title : t.copy_response_title}
+                  aria-label={isCopied ? t.copied_response_title : t.copy_response_title}
                 >
-                  <ThumbsUp size={16} color={feedbackState === 'like' ? 'var(--link-color)' : '#adb1b9'} fill={feedbackState === 'like' ? 'var(--link-color)' : 'none'} />
-                </button>
-                <button
-                  className={`feedback-btn dislike-btn ${feedbackState === 'dislike' ? 'active' : ''}`}
-                  onClick={() => {
-                    const newState = feedbackState === 'dislike' ? null : 'dislike';
-                    setFeedbackState(newState);
-                    onFeedback(logId, feedbackToken, newState);
-                  }}
-                  title="Dissatisfied"
-                >
-                  <ThumbsDown size={16} color={feedbackState === 'dislike' ? '#ea4335' : '#adb1b9'} fill={feedbackState === 'dislike' ? '#ea4335' : 'none'} />
+                  {isCopied ? (
+                    <Check size={16} color="var(--link-color)" strokeWidth={2} />
+                  ) : (
+                    <Clipboard size={16} color="#adb1b9" strokeWidth={1.7} />
+                  )}
                 </button>
                 {contexts && contexts.length > 0 && (
                   <button
                     className={`feedback-btn source-toggle-btn ${isMobileExpanded ? 'active' : ''}`}
                     onClick={() => setIsMobileExpanded(!isMobileExpanded)}
                     title={t.reference_title}
+                    aria-label={t.reference_title}
                   >
                     <BookOpen size={16} color={isMobileExpanded ? 'var(--link-color)' : '#adb1b9'} strokeWidth={1.5} />
                   </button>

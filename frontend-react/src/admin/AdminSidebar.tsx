@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import Select from 'react-select';
-import { Scholarship, MetadataSchema } from './types';
+import type { StylesConfig } from 'react-select';
+import { Scholarship, MetadataSchema, isUnauthorizedError } from './types';
 import { apiListScholarships, apiGetScholarship, apiGetMetadataSchema } from './api';
 import './admin.css';
 interface AdminSidebarProps {
@@ -26,8 +27,8 @@ export function AdminSidebar({ onSelect, onUnauthorized, refreshTrigger }: Admin
             ]);
             setAllScholarships(scholarships);
             setSchema(meta);
-        } catch (err: any) {
-            if (err.message === 'UNAUTHORIZED') onUnauthorized();
+        } catch (err: unknown) {
+            if (isUnauthorizedError(err)) onUnauthorized();
         }
     }, [onUnauthorized]);
     useEffect(() => { fetchData(); }, [fetchData, refreshTrigger]);
@@ -56,18 +57,18 @@ export function AdminSidebar({ onSelect, onUnauthorized, refreshTrigger }: Admin
         try {
             const detail = await apiGetScholarship(code);
             onSelect(detail);
-        } catch (err: any) {
-            if (err.message === 'UNAUTHORIZED') onUnauthorized();
+        } catch (err: unknown) {
+            if (isUnauthorizedError(err)) onUnauthorized();
         }
     };
     const toOptions = (arr: string[] = []): OptionType[] => arr.map(s => ({ value: s, label: s }));
-    const selectStyles = {
-        control: (base: any) => ({
+    const selectStyles: StylesConfig<OptionType, true> = {
+        control: (base) => ({
             ...base, borderRadius: 8, borderColor: '#cbd5e1', fontSize: '0.9rem', minHeight: 40,
         }),
-        multiValue: (base: any) => ({ ...base, backgroundColor: '#6366f1', borderRadius: 6 }),
-        multiValueLabel: (base: any) => ({ ...base, color: '#fff' }),
-        multiValueRemove: (base: any) => ({ ...base, color: '#fff', ':hover': { backgroundColor: '#4f46e5' } }),
+        multiValue: (base) => ({ ...base, backgroundColor: '#6366f1', borderRadius: 6 }),
+        multiValueLabel: (base) => ({ ...base, color: '#fff' }),
+        multiValueRemove: (base) => ({ ...base, color: '#fff', ':hover': { backgroundColor: '#4f46e5' } }),
     };
     return (
         <aside className="sidebar glass-panel">
