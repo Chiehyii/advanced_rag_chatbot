@@ -2,7 +2,7 @@ import os
 import sys
 import uuid
 import config
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 import asyncio
 from fastapi.middleware.cors import CORSMiddleware
@@ -335,7 +335,7 @@ async def chat_endpoint(request: Request):
 
 @app.post("/feedback")
 @limiter.limit(config.RATE_LIMIT_FEEDBACK)
-async def feedback_endpoint(request: Request, feedback_request: FeedbackRequest):
+async def feedback_endpoint(request: Request, response: Response, feedback_request: FeedbackRequest):
     """
     Receives user feedback and updates the corresponding log entry in the database.
     """
@@ -391,7 +391,7 @@ async def feedback_endpoint(request: Request, feedback_request: FeedbackRequest)
 # --- Public Scholarship Filter API ---
 @app.get("/scholarships/filter")
 @limiter.limit("20/minute")
-async def filter_scholarships(request: Request):
+async def filter_scholarships(request: Request, response: Response):
     """
     公開端點：回傳獎學金清單（僅包含 title + metadata），供前端篩選 Modal 使用。
     不需要管理員認證，但有速率限制。已加入 10 分鐘記憶體快取。

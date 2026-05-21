@@ -47,11 +47,14 @@ function App() {
   // [PERF-4] RAF handle 用於批次更新串流內容，避免每個 token 就觸發一次 re-render
   const rafRef = useRef<number | null>(null);
   const fullAnswerRef = useRef<string>(''); // 持綌最新的 fullAnswer，供 RAF closure 使用
-  const flushStreamingContent = () => {
+  const cancelPendingStreamingFrame = () => {
     if (rafRef.current !== null) {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     }
+  };
+  const flushStreamingContent = () => {
+    cancelPendingStreamingFrame();
     const latest = fullAnswerRef.current;
     setMessages(prev => {
       const newMessages = [...prev];
@@ -114,7 +117,9 @@ function App() {
       { role: 'user' as const, content: query.slice(0, MAX_HISTORY_CONTENT_LENGTH) },
     ];
     // Add empty placeholder for bot streaming
+    fullAnswerRef.current = '';
     setMessages(prev => [...prev, { role: 'assistant', content: '', isStreaming: true }]);
+    let requestFailed = false;
     try {
       const response = await fetch(`${API_BASE_URL}/chat`, {
         method: 'POST',
@@ -138,6 +143,9 @@ function App() {
         sessionStorage.setItem(CHAT_SESSION_TOKEN_KEY, nextChatSessionToken);
       }
       if (!response.ok) {
+        if (response.status === 429) {
+          throw new Error('RATE_LIMITED');
+        }
         const errorText = await response.text().catch(() => '');
         throw new Error(`Network response was not ok (${response.status}): ${errorText}`);
       }
@@ -238,13 +246,16 @@ function App() {
       }
     } catch (error) {
       console.error('API Error:', error);
+      requestFailed = true;
+      cancelPendingStreamingFrame();
+      const isRateLimited = error instanceof Error && error.message === 'RATE_LIMITED';
       setMessages(prev => {
         const newMessages = [...prev];
         const lastIdx = newMessages.length - 1;
         if (newMessages[lastIdx].role === 'assistant') {
           newMessages[lastIdx] = {
             ...newMessages[lastIdx],
-            content: 'Sorry, an error occurred while connecting. Please try again later.',
+            content: isRateLimited ? translations[language].rate_limit_message : translations[language].error_message,
             isStreaming: false
           };
         }
@@ -252,7 +263,9 @@ function App() {
       });
     } finally {
       // [PERF-4] 確保离開時清除殘餘的 RAF
-      flushStreamingContent();
+      if (!requestFailed) {
+        flushStreamingContent();
+      }
       setIsLoading(false);
     }
   };
