@@ -409,7 +409,7 @@ async def filter_scholarships(request: Request, response: Response):
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT scholarship_code, title, category, tags "
-                "FROM scholarships ORDER BY title;"
+                "FROM tcuscholarships ORDER BY title;"
             )
             rows = cursor.fetchall()
             result = []
