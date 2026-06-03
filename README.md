@@ -216,4 +216,4 @@ Residual note: the SSL certificate whitelist for the web scraper uses a broad `*
 
 ## License
 
-This project is developed for academic and research use at Tzu Chi University. Contact the repository owner for usage terms.
+This project is developed for academic and research use at a university. Contact the repository owner for usage terms.
