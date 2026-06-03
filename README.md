@@ -23,7 +23,7 @@ Scholarship information is often scattered across multiple pages, changes freque
 | **Frontend** | React 18 · TypeScript · Vite · React Router v7 |
 | **Backend** | FastAPI · Uvicorn · Python 3.11+ |
 | **Agent** | LangGraph (stateful multi-node graph) |
-| **LLM / Embeddings** | OpenAI `gpt-4.1-mini` · `text-embedding-3-small` |
+| **LLM / Embeddings** | OpenAI `gpt-4.1` · `text-embedding-3-small` |
 | **Vector DB** | Milvus / Zilliz Cloud (hybrid BM25 + dense, RRF reranking) |
 | **Relational DB** | PostgreSQL (psycopg connection pooling) |
 | **Scheduler** | APScheduler + PostgreSQL Advisory Locks |
